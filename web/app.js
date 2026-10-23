@@ -8,6 +8,7 @@ let authToken = localStorage.getItem("antigravity_token") || "";
 let currentPin = "";
 let pendingMessages = [];
 let currentSteps = [];
+let renderedStepMap = new Map();
 
 // DOM Elements
 const sessionSelect = document.getElementById("sessionSelect");
@@ -209,6 +210,7 @@ async function loadConversations() {
 sessionSelect.addEventListener("change", (e) => {
   activeConversationId = e.target.value;
   chatContainer.innerHTML = "";
+  renderedStepMap.clear();
   lastStepIndex = 0;
   fetchTranscript(true);
 });
@@ -231,10 +233,144 @@ async function fetchTranscript(forceScroll = false) {
   }
 }
 
+function isUserSelecting() {
+  const sel = window.getSelection();
+  return sel && sel.toString().trim().length > 0;
+}
+
+function getStepHash(step) {
+  const toolHash = (step.tool_calls || []).map(t => `${t.name}:${t.status}:${t.result ? t.result.length : 0}`).join('|');
+  return `${step.sender}:${step.status}:${step.text || ''}:${toolHash}`;
+}
+
+function copyTextToClipboard(text, btn) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      showCopiedFeedback(btn);
+    }).catch(() => fallbackCopy(text, btn));
+  } else {
+    fallbackCopy(text, btn);
+  }
+}
+
+function fallbackCopy(text, btn) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  try {
+    document.execCommand("copy");
+    showCopiedFeedback(btn);
+  } catch(e) {
+    console.error("Copy failed", e);
+  }
+  document.body.removeChild(ta);
+}
+
+function showCopiedFeedback(btn) {
+  if (navigator.vibrate) navigator.vibrate(20);
+  const orig = btn.innerHTML;
+  btn.innerHTML = "✅ Copied!";
+  btn.classList.add("copied");
+  setTimeout(() => {
+    btn.innerHTML = orig;
+    btn.classList.remove("copied");
+  }, 1800);
+}
+
+function addCopyButtonsToBubble(bubble, rawText) {
+  if (rawText && rawText.trim()) {
+    const copyMsgBtn = document.createElement("button");
+    copyMsgBtn.className = "copy-msg-btn";
+    copyMsgBtn.innerHTML = "📋 Copy Response";
+    copyMsgBtn.onclick = (e) => {
+      e.stopPropagation();
+      copyTextToClipboard(rawText, copyMsgBtn);
+    };
+    bubble.appendChild(copyMsgBtn);
+  }
+
+  const preElements = bubble.querySelectorAll("pre:not(.tool-body)");
+  preElements.forEach(pre => {
+    if (pre.querySelector(".copy-code-btn")) return;
+    const btn = document.createElement("button");
+    btn.className = "copy-code-btn";
+    btn.innerHTML = "📋 Copy Code";
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const codeEl = pre.querySelector("code");
+      const textToCopy = codeEl ? codeEl.innerText : pre.innerText;
+      copyTextToClipboard(textToCopy, btn);
+    };
+    pre.appendChild(btn);
+  });
+}
+
+function buildMessageElement(step) {
+  const wrapper = document.createElement("div");
+  wrapper.className = `message-wrapper ${step.sender}`;
+  wrapper.setAttribute("data-step-index", step.index);
+
+  const bubble = document.createElement("div");
+  bubble.className = "message-bubble";
+
+  if (step.sender === "user") {
+    bubble.textContent = step.text;
+  } else if (step.sender === "agent") {
+    let html = "";
+    if (step.text) {
+      html += typeof marked !== "undefined" ? marked.parse(step.text) : escapeHtml(step.text);
+    }
+    if (step.tool_calls && step.tool_calls.length > 0) {
+      step.tool_calls.forEach(tc => {
+        let argSummary = "";
+        try {
+          if (tc.args) {
+            argSummary = tc.args.toolSummary || tc.args.CommandLine || tc.args.Path || JSON.stringify(tc.args).substring(0, 40);
+          }
+        } catch(e) {}
+
+        const resultText = tc.result || "Executing command...";
+        html += `
+          <div class="tool-pill" onclick="this.classList.toggle('expanded')">
+            <div class="tool-header">
+              <div class="tool-name">⚡ ${escapeHtml(tc.name)} <span style="color:var(--text-muted); font-size:10px;">${escapeHtml(argSummary)}</span></div>
+              <span class="tool-badge ${tc.status}">${tc.status}</span>
+            </div>
+            <pre class="tool-body">${escapeHtml(resultText)}</pre>
+          </div>
+        `;
+      });
+    }
+    bubble.innerHTML = html || "<span style='color:var(--text-muted);'>Processing...</span>";
+    addCopyButtonsToBubble(bubble, step.text);
+  } else {
+    bubble.textContent = step.text;
+  }
+
+  wrapper.appendChild(bubble);
+
+  if (step.time) {
+    const meta = document.createElement("div");
+    meta.className = "message-meta";
+    const dt = new Date(step.time);
+    meta.textContent = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    wrapper.appendChild(meta);
+  }
+
+  return wrapper;
+}
+
 function renderMessages(steps, forceScroll = false) {
   if (steps) currentSteps = steps;
-  chatContainer.innerHTML = "";
-  let hasRunningTools = false;
+
+  // If user is currently dragging/selecting text, PAUSE updating so selection is not collapsed!
+  if (isUserSelecting() && !forceScroll) {
+    return;
+  }
 
   // Clear matched pending messages
   if (steps && steps.length > 0) {
@@ -242,66 +378,45 @@ function renderMessages(steps, forceScroll = false) {
     pendingMessages = pendingMessages.filter(p => !userStepTexts.includes(p.text.trim()) && (Date.now() - p.timestamp < 45000));
   }
 
+  let hasRunningTools = false;
+  let hasNewOrChangedNode = false;
+
+  // Remove existing pending elements before reconciling
+  const existingPendingEls = chatContainer.querySelectorAll(".message-wrapper.pending");
+  existingPendingEls.forEach(el => el.remove());
+
   currentSteps.forEach(step => {
-    const wrapper = document.createElement("div");
-    wrapper.className = `message-wrapper ${step.sender}`;
+    if (step.tool_calls && step.tool_calls.some(tc => tc.status === "running")) {
+      hasRunningTools = true;
+    }
 
-    const bubble = document.createElement("div");
-    bubble.className = "message-bubble";
+    const newHash = getStepHash(step);
+    const existing = renderedStepMap.get(step.index);
 
-    if (step.sender === "user") {
-      bubble.textContent = step.text;
-    } else if (step.sender === "agent") {
-      let html = "";
-      if (step.text) {
-        html += typeof marked !== "undefined" ? marked.parse(step.text) : escapeHtml(step.text);
+    if (existing) {
+      if (existing.hash !== newHash) {
+        // Content changed (e.g. tool execution finished or stream update)
+        const updatedEl = buildMessageElement(step);
+        chatContainer.replaceChild(updatedEl, existing.element);
+        renderedStepMap.set(step.index, { hash: newHash, element: updatedEl });
+        hasNewOrChangedNode = true;
       }
-      if (step.tool_calls && step.tool_calls.length > 0) {
-        step.tool_calls.forEach(tc => {
-          if (tc.status === "running") hasRunningTools = true;
-          let argSummary = "";
-          try {
-            if (tc.args) {
-              argSummary = tc.args.toolSummary || tc.args.CommandLine || tc.args.Path || JSON.stringify(tc.args).substring(0, 40);
-            }
-          } catch(e) {}
-
-          const resultText = tc.result || "Executing command...";
-          html += `
-            <div class="tool-pill" onclick="this.classList.toggle('expanded')">
-              <div class="tool-header">
-                <div class="tool-name">⚡ ${escapeHtml(tc.name)} <span style="color:var(--text-muted); font-size:10px;">${escapeHtml(argSummary)}</span></div>
-                <span class="tool-badge ${tc.status}">${tc.status}</span>
-              </div>
-              <pre class="tool-body">${escapeHtml(resultText)}</pre>
-            </div>
-          `;
-        });
-      }
-      bubble.innerHTML = html || "<span style='color:var(--text-muted);'>Processing...</span>";
+      // If hash matches, DO NOTHING! Element remains untouched in DOM.
     } else {
-      bubble.textContent = step.text;
+      // Net new message
+      const newEl = buildMessageElement(step);
+      chatContainer.appendChild(newEl);
+      renderedStepMap.set(step.index, { hash: newHash, element: newEl });
+      hasNewOrChangedNode = true;
     }
-
-    wrapper.appendChild(bubble);
-
-    if (step.time) {
-      const meta = document.createElement("div");
-      meta.className = "message-meta";
-      const dt = new Date(step.time);
-      meta.textContent = dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      wrapper.appendChild(meta);
-    }
-
-    chatContainer.appendChild(wrapper);
   });
 
-  // Render any pending user messages
+  // Render pending messages at bottom
   pendingMessages.forEach(p => {
     const wrapper = document.createElement("div");
-    wrapper.className = "message-wrapper user";
+    wrapper.className = "message-wrapper user pending";
     wrapper.innerHTML = `
-      <div class="message-bubble" style="opacity: 0.9;">${escapeHtml(p.text)}</div>
+      <div class="message-bubble" style="opacity: 0.85;">${escapeHtml(p.text)}</div>
       <div class="message-meta">Sending...</div>
     `;
     chatContainer.appendChild(wrapper);
@@ -311,7 +426,8 @@ function renderMessages(steps, forceScroll = false) {
     updateStatus("Working", "working");
   }
 
-  if (forceScroll || autoScroll) {
+  // Only scroll if there's genuinely new content and user was already at bottom or forceScroll is true
+  if (forceScroll || (hasNewOrChangedNode && autoScroll && !isUserSelecting())) {
     scrollToBottom();
   }
 }
