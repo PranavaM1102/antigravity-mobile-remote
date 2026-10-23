@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#161b22">
+  <title>Antigravity Mobile</title>
+  <link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-logo">⚡</div>
+      <div class="brand-title">Antigravity</div>
+    </div>
+    <div class="session-selector-container">
+      <select id="sessionSelect" title="Select Conversation">
+        <option value="">Loading...</option>
+      </select>
+    </div>
+    <div class="header-actions">
+      <div class="status-badge" id="statusBadge">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Connecting</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Tab Bar -->
+  <nav class="tab-bar">
+    <button class="tab-btn active" data-tab="chat">💬 Agent Chat</button>
+    <button class="tab-btn" data-tab="terminal">💻 Shell</button>
+    <button class="tab-btn" data-tab="info">📱 Connect & QR</button>
+  </nav>
+
+  <!-- Main Content -->
+  <main>
+    <!-- TAB 1: Chat & Agent -->
+    <section class="tab-pane active" id="chatPane">
+      <div class="chat-container" id="chatContainer">
+        <!-- Messages rendered dynamically -->
+      </div>
+
+      <!-- Quick Action Pills -->
+      <div class="quick-pills">
+        <button class="pill-btn" onclick="sendQuickPrompt('What is the current status of the task?')">📊 Status</button>
+        <button class="pill-btn" onclick="sendQuickPrompt('Run git status and show summary')">🐙 Git Status</button>
+        <button class="pill-btn" onclick="sendQuickPrompt('List files in the current workspace')">📁 Files</button>
+        <button class="pill-btn" onclick="sendQuickPrompt('Check running processes and system resources')">⚙️ System</button>
+      </div>
+
+      <!-- Chat Input Bar -->
+      <div class="chat-input-bar">
+        <button class="action-btn voice-btn" id="voiceBtn" title="Voice Input">🎙️</button>
+        <div class="input-container">
+          <textarea id="promptInput" rows="1" placeholder="Command Antigravity..."></textarea>
+        </div>
+        <button class="action-btn send-btn" id="sendBtn" title="Send Command">🚀</button>
+      </div>
+    </section>
+
+    <!-- TAB 2: Direct Terminal -->
+    <section class="tab-pane" id="terminalPane">
+      <div class="term-quick-btns">
+        <button class="term-quick-btn" onclick="runTermQuick('git status')">git status</button>
+        <button class="term-quick-btn" onclick="runTermQuick('dir')">dir</button>
+        <button class="term-quick-btn" onclick="runTermQuick('Get-Process | Select-Object -First 10')">ps</button>
+        <button class="term-quick-btn" onclick="runTermQuick('ipconfig')">ipconfig</button>
+        <button class="term-quick-btn" onclick="clearTerminal()">Clear</button>
+      </div>
+      <div class="terminal-output" id="terminalOutput">PowerShell Terminal Ready.
+Type any command below to execute directly on the PC.
+</div>
+      <div class="term-input-bar">
+        <input type="text" id="termInput" placeholder="Enter PowerShell command..." autocomplete="off">
+        <button class="term-run-btn" id="termRunBtn">Run</button>
+      </div>
+    </section>
+
+    <!-- TAB 3: Connect & QR Info -->
+    <section class="tab-pane" id="infoPane">
+      <div class="info-card">
+        <h3>📱 Mobile Connection QR Code</h3>
+        <p style="font-size: 13px; color: var(--text-muted);">Scan this QR code with any phone or tablet on the same Wi-Fi or Tailscale network to open this controller.</p>
+        <div class="qr-box">
+          <img id="qrImage" src="/api/qr" alt="QR Code">
+          <div style="font-size: 11px; color: var(--text-muted); text-align: center;">Point your camera at this code</div>
+        </div>
+      </div>
+
+      <div class="info-card">
+        <h3>🌐 Connection URLs</h3>
+        <div class="ip-list" id="ipList">
+          <div class="ip-item">
+            <span class="ip-label">Loading IPs...</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="info-card">
+        <h3>✨ Start New Agent Conversation</h3>
+        <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 8px;">Launch a brand new autonomous Antigravity task:</p>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          <input type="text" id="newConvPrompt" placeholder="What should Antigravity do?" style="background:var(--bg-tertiary); border:1px solid var(--border-color); color:#fff; padding:8px; border-radius:6px; font-size:13px; outline:none;">
+          <button onclick="startNewConversation()" style="background:linear-gradient(135deg, #10b981, #059669); color:white; border:none; padding:8px 12px; border-radius:6px; font-weight:600; font-size:13px; cursor:pointer;">Start Conversation</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/web/marked.min.js"></script>
+  <script src="/web/app.js"></script>
+</body>
+</html>

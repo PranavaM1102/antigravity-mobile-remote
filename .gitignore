@@ -1,0 +1,23 @@
+# Binaries & Downloads
+cloudflared.exe
+cloudflared
+*.exe
+*.bin
+
+# Generated runtime files
+qr_*.png
+tunnel_url.txt
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.env
+venv/
+env/
+
+# OS specific files
+.DS_Store
+Thumbs.db
+desktop.ini
