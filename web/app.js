@@ -139,18 +139,10 @@ tabBtns.forEach(btn => {
   });
 });
 
-// Auto-expand textarea
+// Auto-expand textarea on typing & Enter
 promptInput.addEventListener("input", function() {
   this.style.height = "auto";
-  this.style.height = Math.min(this.scrollHeight, 100) + "px";
-});
-
-// Handle enter key in chat
-promptInput.addEventListener("keydown", function(e) {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    sendMessage();
-  }
+  this.style.height = Math.min(this.scrollHeight, 120) + "px";
 });
 
 // Detect scroll to toggle autoScroll
