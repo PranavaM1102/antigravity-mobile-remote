@@ -6,6 +6,8 @@ let isRecording = false;
 let speechRecognizer = null;
 let authToken = localStorage.getItem("antigravity_token") || "";
 let currentPin = "";
+let pendingMessages = [];
+let currentSteps = [];
 
 // DOM Elements
 const sessionSelect = document.getElementById("sessionSelect");
@@ -230,10 +232,17 @@ async function fetchTranscript(forceScroll = false) {
 }
 
 function renderMessages(steps, forceScroll = false) {
+  if (steps) currentSteps = steps;
   chatContainer.innerHTML = "";
   let hasRunningTools = false;
 
-  steps.forEach(step => {
+  // Clear matched pending messages
+  if (steps && steps.length > 0) {
+    const userStepTexts = steps.filter(s => s.sender === "user").map(s => s.text.trim());
+    pendingMessages = pendingMessages.filter(p => !userStepTexts.includes(p.text.trim()) && (Date.now() - p.timestamp < 45000));
+  }
+
+  currentSteps.forEach(step => {
     const wrapper = document.createElement("div");
     wrapper.className = `message-wrapper ${step.sender}`;
 
@@ -287,6 +296,17 @@ function renderMessages(steps, forceScroll = false) {
     chatContainer.appendChild(wrapper);
   });
 
+  // Render any pending user messages
+  pendingMessages.forEach(p => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "message-wrapper user";
+    wrapper.innerHTML = `
+      <div class="message-bubble" style="opacity: 0.9;">${escapeHtml(p.text)}</div>
+      <div class="message-meta">Sending...</div>
+    `;
+    chatContainer.appendChild(wrapper);
+  });
+
   if (hasRunningTools) {
     updateStatus("Working", "working");
   }
@@ -306,10 +326,9 @@ async function sendMessage(textToSend) {
   promptInput.value = "";
   promptInput.style.height = "auto";
 
-  const wrapper = document.createElement("div");
-  wrapper.className = "message-wrapper user";
-  wrapper.innerHTML = `<div class="message-bubble">${escapeHtml(content)}</div>`;
-  chatContainer.appendChild(wrapper);
+  // Track in pending messages
+  pendingMessages.push({ text: content, timestamp: Date.now() });
+  renderMessages(currentSteps, true);
   scrollToBottom();
 
   updateStatus("Thinking", "working");
@@ -325,7 +344,7 @@ async function sendMessage(textToSend) {
     });
     if (!res.ok) throw new Error("Failed to send");
 
-    burstPoll(8, 1500);
+    burstPoll(8, 1200);
   } catch (err) {
     if (err.message !== "Authentication required") {
       alert("Error sending message: " + err.message);

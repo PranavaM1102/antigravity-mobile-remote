@@ -261,6 +261,19 @@ def get_transcript(conv_id, since_index=0):
                 "time": tstamp
             })
 
+        elif stype == "SYSTEM_MESSAGE":
+            cnt = s.get("content", "")
+            m = re.search(r'\[Message\].*?content=(.*?)(?:\n</SYSTEM_MESSAGE>|\Z)', cnt, re.DOTALL)
+            if m:
+                extracted = m.group(1).strip()
+                if not extracted.startswith("Task id ") and not extracted.startswith("Tool execution was"):
+                    messages.append({
+                        "index": idx,
+                        "sender": "user",
+                        "text": extracted,
+                        "time": tstamp
+                    })
+
         elif stype == "PLANNER_RESPONSE":
             content = s.get("content", "")
             tool_calls = s.get("tool_calls", [])
