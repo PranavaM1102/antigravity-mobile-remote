@@ -15,6 +15,7 @@ import glob
 import time
 import socket
 import re
+import secrets
 import urllib.parse
 import urllib.request
 import subprocess
@@ -26,6 +27,7 @@ PORT = int(os.environ.get("PORT", 8080))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
 HOME_DIR = os.path.expanduser("~")
+PIN_FILE = os.path.join(BASE_DIR, "pin.txt")
 
 # Dynamic discovery of Antigravity paths
 BRAIN_DIR = os.environ.get("ANTIGRAVITY_BRAIN", os.path.join(HOME_DIR, ".gemini", "antigravity", "brain"))
@@ -44,6 +46,18 @@ CLOUDFLARED_EXE = os.path.join(BASE_DIR, CLOUDFLARED_NAME)
 
 PUBLIC_TUNNEL_URL = None
 TUNNEL_PROCESS = None
+VALID_TOKENS = set()
+
+def get_configured_pin():
+    if os.path.isfile(PIN_FILE):
+        try:
+            with open(PIN_FILE, "r", encoding="utf-8") as f:
+                pin = f.read().strip()
+                if pin:
+                    return pin
+        except Exception:
+            pass
+    return os.environ.get("REMOTE_PIN", "1234")
 
 def get_latest_conversation_id():
     if not os.path.exists(BRAIN_DIR):
@@ -155,6 +169,7 @@ def start_cloudflared_tunnel():
                 print("\n" + "=" * 65)
                 print("  🌐 PUBLIC INTERNET TUNNEL READY (NO WI-FI NEEDED):")
                 print(f"  👉 {PUBLIC_TUNNEL_URL}")
+                print(f"  🔐 Security PIN : {get_configured_pin()}")
                 print("=" * 65 + "\n")
 
                 try:
@@ -295,13 +310,21 @@ class RemoteHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
 
+    def check_auth(self):
+        token = self.headers.get("X-Auth-Token")
+        if not token:
+            parsed = urlparse(self.path)
+            query = parse_qs(parsed.query)
+            token = query.get("token", [""])[0]
+        return token in VALID_TOKENS
+
     def send_json(self, data, code=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -310,7 +333,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token")
         self.end_headers()
 
     def do_GET(self):
@@ -318,6 +341,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
         path = parsed.path
         query = parse_qs(parsed.query)
 
+        # Public static assets
         if path == "/" or path == "/index.html":
             file_path = os.path.join(WEB_DIR, "index.html")
             self.serve_file(file_path, "text/html; charset=utf-8")
@@ -340,30 +364,6 @@ class RemoteHandler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404, "File Not Found")
 
-        elif path == "/api/status":
-            ips = get_network_ips()
-            active_id = get_latest_conversation_id()
-            self.send_json({
-                "status": "online",
-                "active_conversation_id": active_id,
-                "public_url": PUBLIC_TUNNEL_URL,
-                "ips": ips,
-                "workspace": WORKSPACE_DIR,
-                "server_time": time.strftime("%Y-%m-%d %H:%M:%S")
-            })
-
-        elif path == "/api/conversations":
-            convs = list_conversations()
-            active_id = get_latest_conversation_id()
-            self.send_json({"conversations": convs, "active_id": active_id})
-
-        elif path == "/api/transcript":
-            default_id = get_latest_conversation_id()
-            cid = query.get("id", [default_id])[0]
-            since = int(query.get("since", [0])[0])
-            data = get_transcript(cid, since)
-            self.send_json(data)
-
         elif path == "/api/qr":
             target_url = query.get("url", [""])[0]
             if not target_url:
@@ -372,6 +372,36 @@ class RemoteHandler(BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", api_url)
             self.end_headers()
+
+        # Protected endpoints below require PIN authentication
+        elif path in ["/api/status", "/api/conversations", "/api/transcript"]:
+            if not self.check_auth():
+                self.send_json({"error": "Unauthorized. PIN required.", "auth_required": True}, code=401)
+                return
+
+            if path == "/api/status":
+                ips = get_network_ips()
+                active_id = get_latest_conversation_id()
+                self.send_json({
+                    "status": "online",
+                    "active_conversation_id": active_id,
+                    "public_url": PUBLIC_TUNNEL_URL,
+                    "ips": ips,
+                    "workspace": WORKSPACE_DIR,
+                    "server_time": time.strftime("%Y-%m-%d %H:%M:%S")
+                })
+
+            elif path == "/api/conversations":
+                convs = list_conversations()
+                active_id = get_latest_conversation_id()
+                self.send_json({"conversations": convs, "active_id": active_id})
+
+            elif path == "/api/transcript":
+                default_id = get_latest_conversation_id()
+                cid = query.get("id", [default_id])[0]
+                since = int(query.get("since", [0])[0])
+                data = get_transcript(cid, since)
+                self.send_json(data)
 
         else:
             self.send_error(404, "Endpoint Not Found")
@@ -388,6 +418,23 @@ class RemoteHandler(BaseHTTPRequestHandler):
                 data = json.loads(body_bytes.decode("utf-8"))
             except Exception:
                 pass
+
+        # PIN Authentication endpoint
+        if path == "/api/auth":
+            submitted_pin = str(data.get("pin", "")).strip()
+            correct_pin = get_configured_pin()
+            if submitted_pin == correct_pin:
+                token = secrets.token_hex(20)
+                VALID_TOKENS.add(token)
+                self.send_json({"status": "ok", "token": token})
+            else:
+                self.send_json({"error": "Invalid PIN"}, code=403)
+            return
+
+        # All other POST endpoints require authentication
+        if not self.check_auth():
+            self.send_json({"error": "Unauthorized. PIN required.", "auth_required": True}, code=401)
+            return
 
         if path == "/api/send":
             default_id = get_latest_conversation_id()
@@ -489,6 +536,7 @@ def run_server():
     ips = get_network_ips()
     print("=" * 60)
     print("  [+] ANTIGRAVITY MOBILE REMOTE SERVER RUNNING")
+    print(f"  🔐 Security PIN  : {get_configured_pin()} (Edit pin.txt to change)")
     print("=" * 60)
     for item in ips:
         print(f"  -> {item['type']:<28}: {item['url']}")

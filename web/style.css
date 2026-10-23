@@ -96,6 +96,23 @@ header {
   gap: 8px;
 }
 
+.header-lock-btn {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 4px 7px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.header-lock-btn:active {
+  background: var(--border-color);
+}
+
 .status-badge {
   display: flex;
   align-items: center;
@@ -583,3 +600,123 @@ main {
   font-family: var(--font-mono);
   color: var(--accent-green);
 }
+
+/* PIN Overlay Styles */
+.pin-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(13, 17, 23, 0.96);
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+.pin-overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.pin-card {
+  width: 90%;
+  max-width: 320px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  padding: 24px 20px;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+}
+
+.pin-lock-icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+.pin-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 4px;
+}
+
+.pin-subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+}
+
+.pin-dots {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.pin-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--border-color);
+  background: transparent;
+  transition: all 0.15s ease;
+}
+
+.pin-dot.filled {
+  background: var(--accent-blue);
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 10px rgba(88, 166, 255, 0.5);
+  transform: scale(1.1);
+}
+
+.pin-error {
+  color: var(--accent-red);
+  font-size: 12px;
+  min-height: 18px;
+  margin-bottom: 12px;
+}
+
+.pin-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  justify-items: center;
+}
+
+.pin-key {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-main);
+  font-size: 20px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.08s ease, background 0.1s ease;
+}
+
+.pin-key:active {
+  background: var(--accent-blue);
+  color: white;
+  transform: scale(0.92);
+}
+
+.pin-key.key-clear {
+  color: var(--accent-orange);
+  font-size: 16px;
+}
+
+.pin-key.key-back {
+  color: var(--text-muted);
+  font-size: 18px;
+}
+

@@ -4,6 +4,8 @@ let isPolling = false;
 let autoScroll = true;
 let isRecording = false;
 let speechRecognizer = null;
+let authToken = localStorage.getItem("antigravity_token") || "";
+let currentPin = "";
 
 // DOM Elements
 const sessionSelect = document.getElementById("sessionSelect");
@@ -19,6 +21,10 @@ const termRunBtn = document.getElementById("termRunBtn");
 const ipList = document.getElementById("ipList");
 const tabBtns = document.querySelectorAll(".tab-btn");
 const tabPanes = document.querySelectorAll(".tab-pane");
+const pinOverlay = document.getElementById("pinOverlay");
+const pinDots = document.getElementById("pinDots");
+const pinError = document.getElementById("pinError");
+const lockBtn = document.getElementById("lockBtn");
 
 // Initialize Marked parser settings if available
 if (typeof marked !== "undefined") {
@@ -27,6 +33,99 @@ if (typeof marked !== "undefined") {
     gfm: true
   });
 }
+
+// Authenticated Fetch Wrapper
+async function authFetch(url, options = {}) {
+  options.headers = options.headers || {};
+  if (authToken) {
+    options.headers["X-Auth-Token"] = authToken;
+  }
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    showPinOverlay();
+    throw new Error("Authentication required");
+  }
+  return res;
+}
+
+// PIN Handling
+function showPinOverlay() {
+  currentPin = "";
+  updatePinDots();
+  pinError.textContent = "";
+  pinOverlay.classList.remove("hidden");
+}
+
+function hidePinOverlay() {
+  pinOverlay.classList.add("hidden");
+  currentPin = "";
+}
+
+function updatePinDots() {
+  const dots = pinDots.querySelectorAll(".pin-dot");
+  dots.forEach((dot, idx) => {
+    if (idx < currentPin.length) {
+      dot.classList.add("filled");
+    } else {
+      dot.classList.remove("filled");
+    }
+  });
+}
+
+function pressPin(digit) {
+  if (currentPin.length < 6) {
+    currentPin += digit;
+    updatePinDots();
+    if (navigator.vibrate) navigator.vibrate(15);
+    if (currentPin.length === 4) {
+      submitPin();
+    }
+  }
+}
+
+function backspacePin() {
+  if (currentPin.length > 0) {
+    currentPin = currentPin.slice(0, -1);
+    updatePinDots();
+    if (navigator.vibrate) navigator.vibrate(10);
+  }
+}
+
+function clearPin() {
+  currentPin = "";
+  updatePinDots();
+  pinError.textContent = "";
+}
+
+async function submitPin() {
+  try {
+    const res = await fetch("/api/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pin: currentPin })
+    });
+    const data = await res.json();
+    if (res.ok && data.token) {
+      authToken = data.token;
+      localStorage.setItem("antigravity_token", authToken);
+      hidePinOverlay();
+      init();
+    } else {
+      pinError.textContent = data.error || "Incorrect PIN";
+      if (navigator.vibrate) navigator.vibrate([40, 40, 40]);
+      setTimeout(clearPin, 600);
+    }
+  } catch (err) {
+    pinError.textContent = "Connection error";
+  }
+}
+
+// Lock button
+lockBtn.addEventListener("click", () => {
+  authToken = "";
+  localStorage.removeItem("antigravity_token");
+  showPinOverlay();
+});
 
 // Setup Tabs
 tabBtns.forEach(btn => {
@@ -68,7 +167,7 @@ function scrollToBottom() {
 // Fetch Status & Initialize
 async function init() {
   try {
-    const res = await fetch("/api/status");
+    const res = await authFetch("/api/status");
     const data = await res.json();
     activeConversationId = data.active_conversation_id;
     updateStatus("Connected", "online");
@@ -81,7 +180,6 @@ async function init() {
           <span class="ip-val">${item.url}</span>
         </div>
       `).join("");
-      // Update QR code with the best LAN IP
       const bestIp = data.ips[0].url;
       const qrImg = document.getElementById("qrImage");
       if (qrImg) {
@@ -93,15 +191,16 @@ async function init() {
     await fetchTranscript(true);
     startPolling();
   } catch (err) {
-    console.error("Init error:", err);
-    updateStatus("Offline", "offline");
+    if (err.message !== "Authentication required") {
+      updateStatus("Offline", "offline");
+    }
   }
 }
 
 // Load Conversations Dropdown
 async function loadConversations() {
   try {
-    const res = await fetch("/api/conversations");
+    const res = await authFetch("/api/conversations");
     const data = await res.json();
     if (data.conversations) {
       sessionSelect.innerHTML = data.conversations.map(c => `
@@ -110,9 +209,7 @@ async function loadConversations() {
         </option>
       `).join("");
     }
-  } catch (err) {
-    console.error("Error loading conversations:", err);
-  }
+  } catch (err) {}
 }
 
 sessionSelect.addEventListener("change", (e) => {
@@ -126,8 +223,7 @@ sessionSelect.addEventListener("change", (e) => {
 async function fetchTranscript(forceScroll = false) {
   if (!activeConversationId) return;
   try {
-    const res = await fetch(`/api/transcript?id=${activeConversationId}&since=0`);
-    if (!res.ok) throw new Error("Network error");
+    const res = await authFetch(`/api/transcript?id=${activeConversationId}&since=0`);
     const data = await res.json();
     updateStatus("Connected", "online");
 
@@ -135,7 +231,9 @@ async function fetchTranscript(forceScroll = false) {
       renderMessages(data.steps, forceScroll);
     }
   } catch (err) {
-    updateStatus("Connecting...", "offline");
+    if (err.message !== "Authentication required") {
+      updateStatus("Connecting...", "offline");
+    }
   }
 }
 
@@ -211,13 +309,11 @@ async function sendMessage(textToSend) {
   const content = textToSend || promptInput.value.trim();
   if (!content) return;
 
-  // Haptic feedback
   if (navigator.vibrate) navigator.vibrate(25);
 
   promptInput.value = "";
   promptInput.style.height = "auto";
 
-  // Optimistic UI update
   const wrapper = document.createElement("div");
   wrapper.className = "message-wrapper user";
   wrapper.innerHTML = `<div class="message-bubble">${escapeHtml(content)}</div>`;
@@ -227,7 +323,7 @@ async function sendMessage(textToSend) {
   updateStatus("Thinking", "working");
 
   try {
-    const res = await fetch("/api/send", {
+    const res = await authFetch("/api/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -237,11 +333,12 @@ async function sendMessage(textToSend) {
     });
     if (!res.ok) throw new Error("Failed to send");
 
-    // Rapid polling burst for 12 seconds
     burstPoll(8, 1500);
   } catch (err) {
-    alert("Error sending message: " + err.message);
-    updateStatus("Connected", "online");
+    if (err.message !== "Authentication required") {
+      alert("Error sending message: " + err.message);
+      updateStatus("Connected", "online");
+    }
   }
 }
 
@@ -251,7 +348,6 @@ function sendQuickPrompt(prompt) {
   sendMessage(prompt);
 }
 
-// Burst polling after action
 function burstPoll(count, interval) {
   let left = count;
   const timer = setInterval(async () => {
@@ -261,10 +357,13 @@ function burstPoll(count, interval) {
   }, interval);
 }
 
-// Background polling loop
 function startPolling() {
+  if (isPolling) return;
+  isPolling = true;
   setInterval(async () => {
-    await fetchTranscript();
+    if (authToken && pinOverlay.classList.contains("hidden")) {
+      await fetchTranscript();
+    }
   }, 2500);
 }
 
@@ -296,14 +395,8 @@ if (SpeechRecognition) {
     promptInput.style.height = promptInput.scrollHeight + "px";
   };
 
-  speechRecognizer.onerror = (e) => {
-    console.error("Speech error:", e);
-    stopVoice();
-  };
-
-  speechRecognizer.onend = () => {
-    stopVoice();
-  };
+  speechRecognizer.onerror = () => stopVoice();
+  speechRecognizer.onend = () => stopVoice();
 
   voiceBtn.addEventListener("click", () => {
     if (isRecording) {
@@ -314,7 +407,7 @@ if (SpeechRecognition) {
   });
 } else {
   voiceBtn.style.opacity = "0.5";
-  voiceBtn.title = "Voice recognition not supported in this browser";
+  voiceBtn.title = "Voice recognition not supported";
 }
 
 function stopVoice() {
@@ -331,7 +424,7 @@ async function runTermCommand(cmd) {
   termInput.value = "";
 
   try {
-    const res = await fetch("/api/exec_terminal", {
+    const res = await authFetch("/api/exec_terminal", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ command: cmd })
@@ -341,7 +434,9 @@ async function runTermCommand(cmd) {
     if (data.stderr) terminalOutput.textContent += "ERROR: " + data.stderr;
     if (data.error) terminalOutput.textContent += "FAIL: " + data.error + "\n";
   } catch (err) {
-    terminalOutput.textContent += `Request failed: ${err.message}\n`;
+    if (err.message !== "Authentication required") {
+      terminalOutput.textContent += `Request failed: ${err.message}\n`;
+    }
   }
   terminalOutput.scrollTop = terminalOutput.scrollHeight;
 }
@@ -356,9 +451,7 @@ function clearTerminal() {
 
 termRunBtn.addEventListener("click", () => runTermCommand(termInput.value.trim()));
 termInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    runTermCommand(termInput.value.trim());
-  }
+  if (e.key === "Enter") runTermCommand(termInput.value.trim());
 });
 
 // Start New Conversation
@@ -366,7 +459,7 @@ async function startNewConversation() {
   const prompt = document.getElementById("newConvPrompt").value.trim();
   if (!prompt) return;
   try {
-    const res = await fetch("/api/new_conversation", {
+    await authFetch("/api/new_conversation", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt: prompt, model: "flash" })
@@ -377,7 +470,9 @@ async function startNewConversation() {
       tabBtns[0].click();
     }, 3000);
   } catch (e) {
-    alert("Failed to start: " + e.message);
+    if (e.message !== "Authentication required") {
+      alert("Failed to start: " + e.message);
+    }
   }
 }
 
@@ -391,5 +486,9 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
-// Start application
-init();
+// Initial check
+if (!authToken) {
+  showPinOverlay();
+} else {
+  init();
+}

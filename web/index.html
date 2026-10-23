@@ -10,6 +10,41 @@
   <link rel="stylesheet" href="/web/style.css">
 </head>
 <body>
+  <!-- PIN Authentication Overlay -->
+  <div class="pin-overlay" id="pinOverlay">
+    <div class="pin-card">
+      <div class="pin-lock-icon">🔒</div>
+      <div class="pin-title">Antigravity Remote</div>
+      <div class="pin-subtitle">Enter PIN to access your workstation</div>
+      
+      <!-- PIN Dots -->
+      <div class="pin-dots" id="pinDots">
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+        <span class="pin-dot"></span>
+      </div>
+      
+      <div class="pin-error" id="pinError"></div>
+
+      <!-- Mobile-friendly keypad -->
+      <div class="pin-keypad">
+        <button class="pin-key" onclick="pressPin('1')">1</button>
+        <button class="pin-key" onclick="pressPin('2')">2</button>
+        <button class="pin-key" onclick="pressPin('3')">3</button>
+        <button class="pin-key" onclick="pressPin('4')">4</button>
+        <button class="pin-key" onclick="pressPin('5')">5</button>
+        <button class="pin-key" onclick="pressPin('6')">6</button>
+        <button class="pin-key" onclick="pressPin('7')">7</button>
+        <button class="pin-key" onclick="pressPin('8')">8</button>
+        <button class="pin-key" onclick="pressPin('9')">9</button>
+        <button class="pin-key key-clear" onclick="clearPin()">C</button>
+        <button class="pin-key" onclick="pressPin('0')">0</button>
+        <button class="pin-key key-back" onclick="backspacePin()">⌫</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Header -->
   <header>
     <div class="brand">
@@ -26,6 +61,7 @@
         <div class="status-dot" id="statusDot"></div>
         <span id="statusText">Connecting</span>
       </div>
+      <button class="header-lock-btn" id="lockBtn" title="Lock Session">🔒</button>
     </div>
   </header>
 
@@ -84,7 +120,7 @@ Type any command below to execute directly on the PC.
     <section class="tab-pane" id="infoPane">
       <div class="info-card">
         <h3>📱 Mobile Connection QR Code</h3>
-        <p style="font-size: 13px; color: var(--text-muted);">Scan this QR code with any phone or tablet on the same Wi-Fi or Tailscale network to open this controller.</p>
+        <p style="font-size: 13px; color: var(--text-muted);">Scan this QR code with any phone or tablet on Mobile Data or Wi-Fi to open this controller.</p>
         <div class="qr-box">
           <img id="qrImage" src="/api/qr" alt="QR Code">
           <div style="font-size: 11px; color: var(--text-muted); text-align: center;">Point your camera at this code</div>

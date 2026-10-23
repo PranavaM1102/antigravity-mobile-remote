@@ -12,6 +12,11 @@
 
 ## ✨ Features
 
+- 🔒 **PIN Authentication & Privacy Protection**:
+  - Built-in 4-digit PIN lock screen with haptic keypad.
+  - Generates secure random session tokens stored in `localStorage`.
+  - Configurable via `pin.txt` or `REMOTE_PIN` environment variable (PIN is never committed to Git).
+  - Manual lock button (🔒) in header to lock the session instantly.
 - 💬 **Live Antigravity Agent Chat**: 
   - Real-time conversation streaming directly from Antigravity session transcripts.
   - Full GitHub-flavored Markdown rendering with syntax highlighting and code blocks.
