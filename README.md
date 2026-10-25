@@ -121,7 +121,7 @@ You can receive your latest tunnel link and system status directly in Telegram:
 3. **Authorize Your Chat**:
    - Open your bot in Telegram and send:
      ```
-     /start 2486
+     /start xxxx
      ```
      *(Use your current PIN)*
    - Your chat is instantly registered and authorized!
