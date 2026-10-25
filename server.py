@@ -539,12 +539,32 @@ class RemoteHandler(BaseHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, f"Error reading file: {e}")
 
+def start_telegram_bot_service():
+    cfg_file = os.path.join(BASE_DIR, "telegram_config.json")
+    if os.path.isfile(cfg_file):
+        try:
+            with open(cfg_file, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+                token = cfg.get("bot_token")
+                if token and len(token) > 10 and token != "YOUR_TELEGRAM_BOT_TOKEN_HERE":
+                    from telegram_bot import TelegramBot
+                    bot = TelegramBot(token)
+                    t = threading.Thread(target=bot.start, daemon=True)
+                    t.start()
+                    return bot
+        except Exception as e:
+            print(f"  [!] Telegram bot init error: {e}")
+    return None
+
 def run_server():
     server_address = ("0.0.0.0", PORT)
     httpd = HTTPServer(server_address, RemoteHandler)
     
     # Start Cloudflare Tunnel for Cellular/Anywhere access
     start_cloudflared_tunnel()
+
+    # Start Telegram Bot if configured
+    start_telegram_bot_service()
 
     ips = get_network_ips()
     print("=" * 60)

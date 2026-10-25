@@ -12,6 +12,10 @@
 
 ## ✨ Features
 
+- 🤖 **Telegram Bot Integration**:
+  - Receive instant push notifications with new links & QR codes whenever the PC reboots or server restarts.
+  - Commands: `/link` (current link & QR), `/status` (CPU, RAM, Disks), `/pin` (view/update PIN), `/ask` (command Antigravity), `/cmd` (run shell commands).
+  - Multi-user security: Authorize your chat simply by sending `/start <PIN>`.
 - 🔒 **PIN Authentication & Privacy Protection**:
   - Built-in 4-digit PIN lock screen with haptic keypad.
   - Generates secure random session tokens stored in `localStorage`.
@@ -95,6 +99,42 @@ When the server starts, it prints connection URLs and opens a QR code:
 - **Outside home (4G/5G Mobile Data):** Scan `qr_internet.png` or open the Cloudflare HTTPS link printed in the console.
 - **On Home Wi-Fi:** Open `http://<your-pc-ip>:8080`.
 - **On Tailscale:** Open `http://<tailscale-ip>:8080`.
+
+---
+
+## 🤖 Telegram Bot Setup (Instant Notifications & System Status)
+
+You can receive your latest tunnel link and system status directly in Telegram:
+
+1. **Create your Bot**:
+   - Open Telegram and search for [`@BotFather`](https://t.me/BotFather).
+   - Send `/newbot`, name your bot (e.g. `MyAntigravityBot`), and get your **HTTP API Token**.
+2. **Add Token**:
+   - Open `telegram_config.json` and paste your token:
+     ```json
+     {
+       "bot_token": "YOUR_BOT_TOKEN_HERE",
+       "allowed_chat_ids": []
+     }
+     ```
+   - *(Or set environment variable `TELEGRAM_BOT_TOKEN`)*
+3. **Authorize Your Chat**:
+   - Open your bot in Telegram and send:
+     ```
+     /start 2486
+     ```
+     *(Use your current PIN)*
+   - Your chat is instantly registered and authorized!
+
+### Telegram Commands
+| Command | Description |
+| :--- | :--- |
+| `/link` | Returns current active Cloudflare link, PIN, and QR code image |
+| `/status` | Live PC health metrics (RAM, CPU, free disk space on C: and D:) |
+| `/pin [code]` | Check current PIN or update it |
+| `/cmd <cmd>` | Execute a PowerShell command on the workstation and view output |
+| `/ask <prompt>` | Send a coding instruction directly to Antigravity |
+| `/help` | Display command list |
 
 ---
 

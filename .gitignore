@@ -8,6 +8,7 @@ cloudflared
 qr_*.png
 tunnel_url.txt
 pin.txt
+telegram_config.json
 
 # Python artifacts
 __pycache__/
