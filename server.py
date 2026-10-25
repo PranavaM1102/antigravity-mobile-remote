@@ -319,6 +319,87 @@ def get_transcript(conv_id, since_index=0):
 
     return {"steps": messages, "total_raw_steps": len(steps)}
 
+def get_limit_metrics():
+    cid = get_latest_conversation_id()
+    cpath = os.path.join(BRAIN_DIR, cid, ".system_generated", "logs", "transcript.jsonl") if cid else ""
+    session_in = 0
+    session_out = 0
+    session_cache = 0
+    last_input_tokens = 0
+    steps_count = 0
+
+    if cpath and os.path.isfile(cpath):
+        try:
+            with open(cpath, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.strip():
+                        obj = json.loads(line)
+                        if obj.get("type") == "PLANNER_RESPONSE":
+                            steps_count += 1
+                            inp = obj.get("input_tokens", 0)
+                            out = obj.get("output_tokens", 0)
+                            cache = obj.get("cache_read_tokens", 0)
+                            session_in += inp
+                            session_out += out
+                            session_cache += cache
+                            if inp > 0:
+                                last_input_tokens = inp
+        except Exception:
+            pass
+
+    context_max = 1048576  # 1M context limit for Gemini
+    context_pct = round((last_input_tokens / context_max) * 100, 2)
+
+    ram_used_gb = 0
+    ram_total_gb = 0
+    ram_pct = 0
+    try:
+        ps_cmd = "Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize, FreePhysicalMemory | ConvertTo-Json"
+        res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, timeout=5)
+        mem = json.loads(res.stdout)
+        total_mb = mem["TotalVisibleMemorySize"] // 1024
+        free_mb = mem["FreePhysicalMemory"] // 1024
+        used_mb = total_mb - free_mb
+        ram_used_gb = round(used_mb / 1024, 1)
+        ram_total_gb = round(total_mb / 1024, 1)
+        ram_pct = round((used_mb / total_mb) * 100, 1)
+    except Exception:
+        pass
+
+    disks = []
+    for d in ["C:", "D:"]:
+        if os.path.exists(d):
+            try:
+                tot, used, free = shutil.disk_usage(d)
+                disks.append({
+                    "drive": d,
+                    "used_gb": round(used / 2**30, 1),
+                    "total_gb": round(tot / 2**30, 1),
+                    "free_gb": round(free / 2**30, 1),
+                    "used_pct": round((used / tot) * 100, 1)
+                })
+            except Exception:
+                pass
+
+    return {
+        "model": "Gemini 3.8 Flash (High)",
+        "active_conversation_id": cid,
+        "context_tokens": last_input_tokens,
+        "context_limit": context_max,
+        "context_used_pct": f"{context_pct}%",
+        "session_input_tokens": session_in,
+        "session_output_tokens": session_out,
+        "session_cache_read_tokens": session_cache,
+        "session_total_tokens": session_in + session_out,
+        "session_steps": steps_count,
+        "ram": {
+            "used_gb": ram_used_gb,
+            "total_gb": ram_total_gb,
+            "pct": f"{ram_pct}%"
+        },
+        "disks": disks
+    }
+
 class RemoteHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -387,7 +468,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
         # Protected endpoints below require PIN authentication
-        elif path in ["/api/status", "/api/conversations", "/api/transcript"]:
+        elif path in ["/api/status", "/api/conversations", "/api/transcript", "/api/limits"]:
             if not self.check_auth():
                 self.send_json({"error": "Unauthorized. PIN required.", "auth_required": True}, code=401)
                 return
@@ -403,6 +484,10 @@ class RemoteHandler(BaseHTTPRequestHandler):
                     "workspace": WORKSPACE_DIR,
                     "server_time": time.strftime("%Y-%m-%d %H:%M:%S")
                 })
+
+            elif path == "/api/limits":
+                data = get_limit_metrics()
+                self.send_json(data)
 
             elif path == "/api/conversations":
                 convs = list_conversations()

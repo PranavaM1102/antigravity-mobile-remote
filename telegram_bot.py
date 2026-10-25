@@ -236,6 +236,8 @@ class TelegramBot:
             self.cmd_link(chat_id)
         elif cmd in ["/status", "/stats"]:
             self.cmd_status(chat_id)
+        elif cmd in ["/limits", "/limit", "/quota"]:
+            self.cmd_limits(chat_id)
         elif cmd == "/pin":
             self.cmd_pin(chat_id, args)
         elif cmd in ["/cmd", "/shell"]:
@@ -346,12 +348,34 @@ class TelegramBot:
         except Exception as e:
             self.send_message(chat_id, f"❌ Error delivering message: {e}")
 
+    def cmd_limits(self, chat_id):
+        from server import get_limit_metrics
+        lim = get_limit_metrics()
+        disks_str = "\n".join([f"  • <b>{d['drive']}</b>: {d['free_gb']}GB free / {d['total_gb']}GB ({d['used_pct']}%)" for d in lim.get("disks", [])])
+        msg = (
+            f"📊 <b>Current Limit &amp; Quota Usage:</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🧠 <b>Model:</b> <code>{lim['model']}</code>\n"
+            f"📏 <b>Context Window:</b> <code>{lim['context_tokens']:,} / {lim['context_limit']:,} ({lim['context_used_pct']})</code>\n"
+            f"📥 <b>Input Tokens:</b> <code>{lim['session_input_tokens']:,}</code>\n"
+            f"📤 <b>Output Tokens:</b> <code>{lim['session_output_tokens']:,}</code>\n"
+            f"⚡ <b>Cache Read:</b> <code>{lim['session_cache_read_tokens']:,}</code>\n"
+            f"🔄 <b>Session Total:</b> <code>{lim['session_total_tokens']:,} tokens ({lim['session_steps']} steps)</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🖥️ <b>Workstation Limits:</b>\n"
+            f"⚡ <b>RAM:</b> <code>{lim['ram']['used_gb']}GB / {lim['ram']['total_gb']}GB ({lim['ram']['pct']})</code>\n"
+            f"💾 <b>Storage:</b>\n{disks_str}\n"
+            f"━━━━━━━━━━━━━━━━━━━"
+        )
+        self.send_message(chat_id, msg)
+
     def cmd_help(self, chat_id):
         msg = (
             f"🤖 <b>Antigravity Telegram Controller</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🔗 <b>/link</b> - Get active Cloudflare link &amp; QR code\n"
             f"📊 <b>/status</b> - Get PC CPU, RAM, and Disk metrics\n"
+            f"📈 <b>/limits</b> - View AI context window, token quotas &amp; limits\n"
             f"🔑 <b>/pin [new_pin]</b> - View or update security PIN\n"
             f"💻 <b>/cmd &lt;command&gt;</b> - Run PowerShell on workstation\n"
             f"🤖 <b>/ask &lt;prompt&gt;</b> - Command Antigravity coding agent\n"

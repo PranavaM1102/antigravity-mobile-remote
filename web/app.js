@@ -139,6 +139,7 @@ tabBtns.forEach(btn => {
     const target = btn.getAttribute("data-tab");
     document.getElementById(target + "Pane").classList.add("active");
     if (target === "chat") scrollToBottom();
+    if (target === "info") fetchLimits();
   });
 });
 
@@ -184,12 +185,75 @@ async function init() {
 
     await loadConversations();
     await fetchTranscript(true);
+    fetchLimits();
     startPolling();
   } catch (err) {
     if (err.message !== "Authentication required") {
       updateStatus("Offline", "offline");
     }
   }
+}
+
+async function fetchLimits() {
+  const container = document.getElementById("limitsContainer");
+  if (!container) return;
+  try {
+    const res = await authFetch("/api/limits");
+    if (!res.ok) return;
+    const data = await res.json();
+    
+    let disksHtml = (data.disks || []).map(d => `
+      <div style="display:flex; justify-content:space-between; margin-top:2px;">
+        <span style="color:var(--text-muted);">${d.drive} Drive:</span>
+        <span style="font-family:var(--font-mono); color:${d.used_pct > 95 ? 'var(--accent-red)' : 'var(--accent-blue)'};">${d.free_gb}GB free of ${d.total_gb}GB (${d.used_pct}%)</span>
+      </div>
+    `).join("");
+
+    container.innerHTML = `
+      <div style="background:var(--bg-tertiary); padding:10px; border-radius:8px; border:1px solid var(--border-color);">
+        <div style="display:flex; justify-content:space-between; font-weight:600; margin-bottom:4px;">
+          <span>🧠 Model Context Window:</span>
+          <span style="color:var(--accent-green);">${data.context_used_pct} used</span>
+        </div>
+        <div style="background:#0d1117; height:6px; border-radius:3px; overflow:hidden; margin:4px 0 6px 0;">
+          <div style="width:${data.context_used_pct}; background:var(--accent-green); height:100%;"></div>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); font-family:var(--font-mono);">
+          <span>Turn Input: ${Number(data.context_tokens).toLocaleString()} tokens</span>
+          <span>Max Limit: ${Number(data.context_limit).toLocaleString()} tokens</span>
+        </div>
+      </div>
+
+      <div style="background:var(--bg-tertiary); padding:10px; border-radius:8px; border:1px solid var(--border-color);">
+        <div style="font-weight:600; margin-bottom:6px; color:var(--accent-blue);">⚡ Session Token Consumption:</div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+          <span style="color:var(--text-muted);">Total Consumed:</span>
+          <span style="font-family:var(--font-mono); font-weight:600; color:#fff;">${Number(data.session_total_tokens).toLocaleString()} tokens</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+          <span style="color:var(--text-muted);">Prompt Input:</span>
+          <span style="font-family:var(--font-mono);">${Number(data.session_input_tokens).toLocaleString()}</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+          <span style="color:var(--text-muted);">Model Output:</span>
+          <span style="font-family:var(--font-mono);">${Number(data.session_output_tokens).toLocaleString()}</span>
+        </div>
+        <div style="display:flex; justify-content:space-between;">
+          <span style="color:var(--text-muted);">Cache Read:</span>
+          <span style="font-family:var(--font-mono); color:var(--accent-purple);">${Number(data.session_cache_read_tokens).toLocaleString()}</span>
+        </div>
+      </div>
+
+      <div style="background:var(--bg-tertiary); padding:10px; border-radius:8px; border:1px solid var(--border-color);">
+        <div style="font-weight:600; margin-bottom:6px; color:var(--accent-orange);">🖥️ Workstation Hardware Limits:</div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+          <span style="color:var(--text-muted);">RAM Usage:</span>
+          <span style="font-family:var(--font-mono);">${data.ram?.used_gb}GB / ${data.ram?.total_gb}GB (${data.ram?.pct})</span>
+        </div>
+        ${disksHtml}
+      </div>
+    `;
+  } catch(e) {}
 }
 
 // Load Conversations Dropdown
