@@ -23,15 +23,62 @@ import threading
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
+import base64
+import uuid
+
 PORT = int(os.environ.get("PORT", 8080))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
+UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+os.makedirs(UPLOADS_DIR, exist_ok=True)
 HOME_DIR = os.path.expanduser("~")
 PIN_FILE = os.path.join(BASE_DIR, "pin.txt")
 
 # Dynamic discovery of Antigravity paths
 BRAIN_DIR = os.environ.get("ANTIGRAVITY_BRAIN", os.path.join(HOME_DIR, ".gemini", "antigravity", "brain"))
 WORKSPACE_DIR = os.getcwd()
+
+def save_uploaded_image(data_url):
+    try:
+        if "," in data_url:
+            header, b64_data = data_url.split(",", 1)
+        else:
+            header = ""
+            b64_data = data_url
+        ext = ".jpg"
+        if "image/png" in header:
+            ext = ".png"
+        elif "image/webp" in header:
+            ext = ".webp"
+        elif "image/gif" in header:
+            ext = ".gif"
+        fname = f"photo_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
+        fpath = os.path.join(UPLOADS_DIR, fname)
+        with open(fpath, "wb") as f:
+            f.write(base64.b64decode(b64_data))
+        return fname, fpath
+    except Exception as e:
+        print(f"Error saving image: {e}")
+        return None, None
+
+def list_workspace_html_files():
+    html_files = []
+    try:
+        for root, dirs, files in os.walk(WORKSPACE_DIR):
+            dirs[:] = [d for d in dirs if d not in [".git", ".gemini", "node_modules", ".venv", "__pycache__", ".vscode"]]
+            for f in files:
+                if f.lower().endswith((".html", ".htm")):
+                    full = os.path.join(root, f)
+                    rel = os.path.relpath(full, WORKSPACE_DIR)
+                    html_files.append({
+                        "path": rel.replace("\\", "/"),
+                        "name": f,
+                        "mtime": os.path.getmtime(full)
+                    })
+    except Exception:
+        pass
+    html_files.sort(key=lambda x: x["mtime"], reverse=True)
+    return html_files
 
 # Detect agentapi executable
 if sys.platform == "win32":
@@ -461,6 +508,51 @@ class RemoteHandler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404, "File Not Found")
 
+        elif path.startswith("/uploads/"):
+            fname = os.path.basename(path)
+            file_path = os.path.join(UPLOADS_DIR, fname)
+            if os.path.isfile(file_path):
+                ext = os.path.splitext(file_path)[1].lower()
+                ctype = {
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".png": "image/png",
+                    ".webp": "image/webp",
+                    ".gif": "image/gif"
+                }.get(ext, "application/octet-stream")
+                self.serve_file(file_path, ctype)
+            else:
+                self.send_error(404, "Upload Not Found")
+
+        elif path == "/preview_file":
+            rel_path = query.get("path", [""])[0]
+            if not rel_path:
+                self.send_error(400, "Missing path parameter")
+                return
+            target_path = os.path.abspath(os.path.join(WORKSPACE_DIR, rel_path))
+            try:
+                common = os.path.commonpath([target_path, os.path.abspath(WORKSPACE_DIR)])
+                if common != os.path.abspath(WORKSPACE_DIR) or not os.path.isfile(target_path):
+                    self.send_error(404, "File Not Found or Access Denied")
+                    return
+            except Exception:
+                self.send_error(403, "Forbidden")
+                return
+
+            ext = os.path.splitext(target_path)[1].lower()
+            ctype = {
+                ".html": "text/html; charset=utf-8",
+                ".htm": "text/html; charset=utf-8",
+                ".css": "text/css; charset=utf-8",
+                ".js": "application/javascript; charset=utf-8",
+                ".json": "application/json; charset=utf-8",
+                ".png": "image/png",
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".svg": "image/svg+xml"
+            }.get(ext, "text/plain; charset=utf-8")
+            self.serve_file(target_path, ctype)
+
         elif path == "/api/qr":
             target_url = query.get("url", [""])[0]
             if not target_url:
@@ -471,7 +563,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
         # Protected endpoints below require PIN authentication
-        elif path in ["/api/status", "/api/conversations", "/api/transcript", "/api/limits"]:
+        elif path in ["/api/status", "/api/conversations", "/api/transcript", "/api/limits", "/api/html_files"]:
             if not self.check_auth():
                 self.send_json({"error": "Unauthorized. PIN required.", "auth_required": True}, code=401)
                 return
@@ -496,6 +588,10 @@ class RemoteHandler(BaseHTTPRequestHandler):
                 convs = list_conversations()
                 active_id = get_latest_conversation_id()
                 self.send_json({"conversations": convs, "active_id": active_id})
+
+            elif path == "/api/html_files":
+                files = list_workspace_html_files()
+                self.send_json({"files": files})
 
             elif path == "/api/transcript":
                 default_id = get_latest_conversation_id()
@@ -541,9 +637,22 @@ class RemoteHandler(BaseHTTPRequestHandler):
             default_id = get_latest_conversation_id()
             cid = data.get("conversation_id", default_id).strip()
             content = data.get("content", "").strip()
-            if not content:
-                self.send_json({"error": "Content cannot be empty"}, code=400)
+            image_data = data.get("image", None)
+
+            if not content and not image_data:
+                self.send_json({"error": "Content or image cannot be empty"}, code=400)
                 return
+
+            uploaded_fname = None
+            if image_data:
+                uploaded_fname, uploaded_fpath = save_uploaded_image(image_data)
+                if uploaded_fpath:
+                    clean_path = uploaded_fpath.replace("\\", "/")
+                    img_tag = f"[Image Attached: file:///{clean_path} | /uploads/{uploaded_fname}]"
+                    if content:
+                        content = f"{img_tag}\n{content}"
+                    else:
+                        content = f"{img_tag}\nPlease inspect and analyze this attached photo."
 
             def execute_send():
                 try:
@@ -558,7 +667,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
 
             t = threading.Thread(target=execute_send, daemon=True)
             t.start()
-            self.send_json({"status": "sent", "conversation_id": cid, "content": content})
+            self.send_json({"status": "sent", "conversation_id": cid, "content": content, "uploaded_image": uploaded_fname})
 
         elif path == "/api/new_conversation":
             prompt = data.get("prompt", "").strip()

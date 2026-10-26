@@ -32,6 +32,9 @@ QR_FILE = os.path.join(BASE_DIR, "qr_internet.png")
 SERVER_PY = os.path.join(BASE_DIR, "server.py")
 AGENTAPI_BAT = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "bin", "agentapi.bat")
 WORKSPACE_DIR = r"D:\_ide\Antigravity"
+BRAIN_DIR = os.environ.get("ANTIGRAVITY_BRAIN", os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "brain"))
+UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
+os.makedirs(UPLOADS_DIR, exist_ok=True)
 
 def escape_html(text):
     return html.escape(str(text)) if text else ""
@@ -642,19 +645,35 @@ class TelegramBot:
             )
             def run_new():
                 try:
+                    existing_cids = set(os.listdir(BRAIN_DIR)) if os.path.exists(BRAIN_DIR) else set()
                     res = subprocess.run([AGENTAPI_BAT, "new-conversation", prompt], capture_output=True, text=True, timeout=25)
-                    self.send_message(
+                    new_cid = None
+                    for _ in range(12):
+                        time.sleep(1)
+                        if os.path.exists(BRAIN_DIR):
+                            curr_cids = set(os.listdir(BRAIN_DIR))
+                            diff = curr_cids - existing_cids
+                            if diff:
+                                new_cid = list(diff)[0]
+                                break
+                    if not new_cid:
+                        from server import get_latest_conversation_id
+                        new_cid = get_latest_conversation_id()
+
+                    self.edit_message_text(
                         chat_id,
-                        f"✅ <b>New Session Started!</b>\n"
-                        f"💬 <i>\"{safe_prompt}\"</i>\n\n"
-                        f"Antigravity is working in the new session. Tap <b>🔗 Get Link</b> or <b>📈 Limits</b> to track progress."
+                        message_id,
+                        f"⏳ <b>Antigravity New Session Active!</b>\n💬 <i>\"{safe_prompt}\"</i>\n\n<i>Waiting for agent response...</i>",
+                        reply_markup={"inline_keyboard": []}
                     )
+                    self.monitor_and_send_final_output(chat_id, message_id, new_cid, -1, prompt)
                 except Exception as e:
                     self.send_message(chat_id, f"❌ Failed to create new session: {escape_html(str(e))}")
             threading.Thread(target=run_new, daemon=True).start()
 
         else:
             cid = target
+            initial_step = self.get_latest_step_index(cid)
             self.edit_message_text(
                 chat_id,
                 message_id,
@@ -664,15 +683,200 @@ class TelegramBot:
             def run_send():
                 try:
                     res = subprocess.run([AGENTAPI_BAT, "send-message", cid, prompt], capture_output=True, text=True, timeout=20)
-                    self.send_message(
+                    self.edit_message_text(
                         chat_id,
-                        f"✅ <b>Prompt Delivered to Session <code>{cid[:8]}</code>!</b>\n"
-                        f"💬 <i>\"{safe_prompt}\"</i>\n\n"
-                        f"Antigravity has received your instruction. Monitor response via your mobile link."
+                        message_id,
+                        f"⏳ <b>Prompt Received by Antigravity!</b>\n💬 <i>\"{safe_prompt}\"</i>\n\n<i>Working on your request... I will post the response here!</i>",
+                        reply_markup={"inline_keyboard": []}
                     )
+                    self.monitor_and_send_final_output(chat_id, message_id, cid, initial_step, prompt)
                 except Exception as e:
                     self.send_message(chat_id, f"❌ Failed delivering message: {escape_html(str(e))}")
             threading.Thread(target=run_send, daemon=True).start()
+
+    def get_latest_step_index(self, cid):
+        if not cid:
+            return -1
+        cpath = os.path.join(BRAIN_DIR, cid, ".system_generated", "logs", "transcript.jsonl")
+        if not os.path.isfile(cpath):
+            return -1
+        max_idx = -1
+        try:
+            with open(cpath, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            obj = json.loads(line)
+                            idx = obj.get("step_index", -1)
+                            if idx > max_idx:
+                                max_idx = idx
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+        return max_idx
+
+    def send_telegram_response_chunks(self, chat_id, text):
+        if not text or not text.strip():
+            self.send_message(chat_id, "🤖 <i>(Antigravity finished with no text output)</i>")
+            return
+
+        clean_text = text.strip()
+        max_chunk = 3800
+
+        def split_into_chunks(s, max_len):
+            if len(s) <= max_len:
+                return [s]
+            chunks = []
+            lines = s.split("\n")
+            curr = ""
+            for line in lines:
+                if len(curr) + len(line) + 1 > max_len:
+                    if curr:
+                        chunks.append(curr)
+                    curr = line
+                else:
+                    curr = (curr + "\n" + line) if curr else line
+            if curr:
+                chunks.append(curr)
+            return chunks
+
+        chunks = split_into_chunks(clean_text, max_chunk)
+        for i, chunk in enumerate(chunks, 1):
+            part_header = f" <i>(Part {i}/{len(chunks)})</i>" if len(chunks) > 1 else ""
+            html_msg = (
+                f"🤖 <b>Antigravity Response{part_header}:</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"{escape_html(chunk)}\n"
+                f"━━━━━━━━━━━━━━━━━━━"
+            )
+            res = self.send_message(chat_id, html_msg, parse_mode="HTML")
+            if not res.get("ok"):
+                plain_msg = f"🤖 Antigravity Response{part_header}:\n━━━━━━━━━━━━━━━━━━━\n{chunk}\n━━━━━━━━━━━━━━━━━━━"
+                self.send_message(chat_id, plain_msg, parse_mode=None)
+            time.sleep(0.3)
+
+    def monitor_and_send_final_output(self, chat_id, message_id, cid, initial_step_index, prompt):
+        poll_start = time.time()
+        last_status_update = time.time()
+        last_tool_name = ""
+        timeout_seconds = 360
+
+        while time.time() - poll_start < timeout_seconds:
+            time.sleep(2.5)
+
+            if not cid:
+                break
+
+            cpath = os.path.join(BRAIN_DIR, cid, ".system_generated", "logs", "transcript.jsonl")
+            if not os.path.isfile(cpath):
+                continue
+
+            steps_after = []
+            try:
+                with open(cpath, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                obj = json.loads(line)
+                                if obj.get("step_index", -1) > initial_step_index:
+                                    steps_after.append(obj)
+                            except Exception:
+                                pass
+            except Exception:
+                continue
+
+            if not steps_after:
+                continue
+
+            # Check for running tools to show live feedback in Telegram
+            for s in steps_after:
+                tcalls = s.get("tool_calls", [])
+                if tcalls:
+                    last_tc = tcalls[-1]
+                    tname = last_tc.get("name", "tool")
+                    if tname != last_tool_name:
+                        last_tool_name = tname
+                        if time.time() - last_status_update > 5:
+                            self.edit_message_text(
+                                chat_id,
+                                message_id,
+                                f"⏳ <b>Antigravity is working...</b>\n"
+                                f"⚡ Running: <code>{escape_html(last_tool_name)}</code> (Step {s.get('step_index')})\n\n"
+                                f"<i>Output will be posted here automatically!</i>",
+                                reply_markup={"inline_keyboard": []}
+                            )
+                            last_status_update = time.time()
+
+            # Check if final response is ready (PLANNER_RESPONSE with non-empty content and no tool calls)
+            final_candidate = None
+            for s in reversed(steps_after):
+                if s.get("type") == "PLANNER_RESPONSE":
+                    cnt = s.get("content", "").strip()
+                    tcalls = s.get("tool_calls", [])
+                    if cnt and len(tcalls) == 0:
+                        final_candidate = cnt
+                        break
+
+            if final_candidate:
+                time.sleep(1.5)
+                self.edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"✅ <b>Antigravity Finished!</b> Response below 👇",
+                    reply_markup={"inline_keyboard": []}
+                )
+                self.send_telegram_response_chunks(chat_id, final_candidate)
+                return
+
+        # Timeout notice
+        self.edit_message_text(
+            chat_id,
+            message_id,
+            f"⏱️ <b>Response Taking Longer Than Usual</b>\n"
+            f"Antigravity is still executing complex tasks. Tap <b>🔗 Get Link</b> to monitor live in mobile chat!",
+            reply_markup={"inline_keyboard": []}
+        )
+
+    def handle_photo(self, chat_id, photo_list, caption):
+        if not self.is_authorized(chat_id):
+            self.send_message(chat_id, "⛔ Unauthorized. Use /start <PIN> to authorize.")
+            return
+
+        if not photo_list:
+            return
+
+        largest = photo_list[-1]
+        file_id = largest.get("file_id")
+        file_res = self.call_api("getFile", {"file_id": file_id})
+        if not file_res.get("ok"):
+            self.send_message(chat_id, "❌ Failed to retrieve photo from Telegram.")
+            return
+
+        file_path = file_res["result"].get("file_path", "")
+        token = self.token
+        download_url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+
+        ext = os.path.splitext(file_path)[1] or ".jpg"
+        local_name = f"photo_{int(time.time())}_{uuid.uuid4().hex[:6]}{ext}"
+        local_path = os.path.join(UPLOADS_DIR, local_name)
+
+        try:
+            req = urllib.request.Request(download_url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp, open(local_path, "wb") as f:
+                f.write(resp.read())
+        except Exception as e:
+            self.send_message(chat_id, f"❌ Failed to download photo: {e}")
+            return
+
+        clean_path = local_path.replace("\\", "/")
+        user_prompt = caption.strip() if caption else "Please inspect and analyze this attached photo."
+        full_prompt = f"[Image Attached: file:///{clean_path} | /uploads/{local_name}]\n{user_prompt}"
+
+        self.send_message(chat_id, "📸 <b>Photo received!</b>")
+        self.cmd_ask(chat_id, full_prompt)
 
     def cmd_help(self, chat_id):
         msg = (
@@ -739,10 +943,12 @@ class TelegramBot:
                             self.handle_callback(cb)
                             continue
                         msg = item.get("message")
-                        if msg and "text" in msg:
-                            chat_id = msg["chat"]["id"]
-                            text = msg["text"]
-                            self.handle_command(chat_id, text)
+                        if msg:
+                            chat_id = msg.get("chat", {}).get("id")
+                            if "photo" in msg:
+                                self.handle_photo(chat_id, msg["photo"], msg.get("caption", ""))
+                            elif "text" in msg:
+                                self.handle_command(chat_id, msg["text"])
             except Exception as e:
                 time.sleep(2)
 

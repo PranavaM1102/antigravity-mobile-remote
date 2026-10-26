@@ -9,6 +9,9 @@ let currentPin = "";
 let pendingMessages = [];
 let currentSteps = [];
 let renderedStepMap = new Map();
+let attachedImageData = null;
+let latestHtmlOutput = "";
+let isMobileHtmlFrame = true;
 
 // DOM Elements
 const sessionSelect = document.getElementById("sessionSelect");
@@ -28,6 +31,17 @@ const pinOverlay = document.getElementById("pinOverlay");
 const pinDots = document.getElementById("pinDots");
 const pinError = document.getElementById("pinError");
 const lockBtn = document.getElementById("lockBtn");
+const cameraBtn = document.getElementById("cameraBtn");
+const cameraInput = document.getElementById("cameraInput");
+const imagePreviewContainer = document.getElementById("imagePreviewContainer");
+const imagePreviewThumb = document.getElementById("imagePreviewThumb");
+const removeImageBtn = document.getElementById("removeImageBtn");
+const htmlSourceSelect = document.getElementById("htmlSourceSelect");
+const htmlDeviceBtn = document.getElementById("htmlDeviceBtn");
+const htmlReloadBtn = document.getElementById("htmlReloadBtn");
+const htmlNewTabBtn = document.getElementById("htmlNewTabBtn");
+const htmlFrameContainer = document.getElementById("htmlFrameContainer");
+const htmlPreviewFrame = document.getElementById("htmlPreviewFrame");
 
 // Initialize Marked parser settings if available
 if (typeof marked !== "undefined") {
@@ -140,6 +154,7 @@ tabBtns.forEach(btn => {
     document.getElementById(target + "Pane").classList.add("active");
     if (target === "chat") scrollToBottom();
     if (target === "info") fetchLimits();
+    if (target === "htmlview") loadHtmlView();
   });
 });
 
@@ -359,17 +374,39 @@ function addCopyButtonsToBubble(bubble, rawText) {
 
   const preElements = bubble.querySelectorAll("pre:not(.tool-body)");
   preElements.forEach(pre => {
-    if (pre.querySelector(".copy-code-btn")) return;
-    const btn = document.createElement("button");
-    btn.className = "copy-code-btn";
-    btn.innerHTML = "📋 Copy Code";
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const codeEl = pre.querySelector("code");
-      const textToCopy = codeEl ? codeEl.innerText : pre.innerText;
-      copyTextToClipboard(textToCopy, btn);
-    };
-    pre.appendChild(btn);
+    const codeEl = pre.querySelector("code");
+    const codeText = codeEl ? codeEl.innerText : pre.innerText;
+
+    // Detect if this code block contains HTML/markup
+    const isHtmlBlock = (codeEl && codeEl.className && codeEl.className.toLowerCase().includes("html")) ||
+                        codeText.includes("<!DOCTYPE html>") ||
+                        codeText.includes("</html>") ||
+                        (codeText.includes("<div") && codeText.includes("</div>")) ||
+                        (codeText.includes("<style>") && codeText.includes("</style>"));
+
+    if (isHtmlBlock && !pre.querySelector(".preview-code-btn")) {
+      const prevBtn = document.createElement("button");
+      prevBtn.className = "preview-code-btn";
+      prevBtn.innerHTML = "🌐 Live Preview";
+      prevBtn.onclick = (e) => {
+        e.stopPropagation();
+        openHtmlInViewer(codeText);
+      };
+      pre.appendChild(prevBtn);
+      // Auto-cache latest html output
+      latestHtmlOutput = codeText;
+    }
+
+    if (!pre.querySelector(".copy-code-btn")) {
+      const btn = document.createElement("button");
+      btn.className = "copy-code-btn";
+      btn.innerHTML = "📋 Copy Code";
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        copyTextToClipboard(codeText, btn);
+      };
+      pre.appendChild(btn);
+    }
   });
 }
 
@@ -382,7 +419,21 @@ function buildMessageElement(step) {
   bubble.className = "message-bubble";
 
   if (step.sender === "user") {
-    bubble.textContent = step.text;
+    const raw = step.text || "";
+    // Detect attached image pattern
+    const m = raw.match(/\[Image Attached:\s*(?:file:\/\/\/[^|\n]*?uploads\/([^|\n\s\]]+)|[^|\n]*?\/uploads\/([^|\n\s\]]+))/i);
+    if (m) {
+      const imgFile = m[1] || m[2];
+      const cleanPrompt = raw.replace(/\[Image Attached:[^\]]*\]/g, "").trim();
+      bubble.innerHTML = `
+        <div class="attached-image-card" onclick="window.open('/uploads/${escapeHtml(imgFile)}', '_blank')">
+          <img src="/uploads/${escapeHtml(imgFile)}" alt="Attached photo">
+        </div>
+        ${cleanPrompt ? `<div class="msg-text">${escapeHtml(cleanPrompt)}</div>` : ""}
+      `;
+    } else {
+      bubble.textContent = step.text;
+    }
   } else if (step.sender === "agent") {
     let html = "";
     if (step.text) {
@@ -499,15 +550,19 @@ function renderMessages(steps, forceScroll = false) {
 // Send Message to Agent
 async function sendMessage(textToSend) {
   const content = textToSend || promptInput.value.trim();
-  if (!content) return;
+  if (!content && !attachedImageData) return;
 
   if (navigator.vibrate) navigator.vibrate(25);
 
   promptInput.value = "";
   promptInput.style.height = "auto";
 
+  const imgToSend = attachedImageData;
+  clearAttachedImage();
+
   // Track in pending messages
-  pendingMessages.push({ text: content, timestamp: Date.now() });
+  const displayText = content || "📸 [Photo attached]";
+  pendingMessages.push({ text: displayText, timestamp: Date.now() });
   renderMessages(currentSteps, true);
   scrollToBottom();
 
@@ -519,7 +574,8 @@ async function sendMessage(textToSend) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         conversation_id: activeConversationId,
-        content: content
+        content: content,
+        image: imgToSend || null
       })
     });
     if (!res.ok) throw new Error("Failed to send");
@@ -682,4 +738,179 @@ if (!authToken) {
   showPinOverlay();
 } else {
   init();
+}
+
+// ==========================================================
+// Camera & Image Attachment Functions
+// ==========================================================
+if (cameraBtn && cameraInput) {
+  cameraBtn.addEventListener("click", () => {
+    cameraInput.click();
+  });
+
+  cameraInput.addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      attachedImageData = event.target.result;
+      if (imagePreviewThumb) imagePreviewThumb.src = attachedImageData;
+      if (imagePreviewContainer) imagePreviewContainer.classList.remove("hidden");
+      promptInput.focus();
+      if (navigator.vibrate) navigator.vibrate(20);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+if (removeImageBtn) {
+  removeImageBtn.addEventListener("click", () => {
+    clearAttachedImage();
+  });
+}
+
+function clearAttachedImage() {
+  attachedImageData = null;
+  if (cameraInput) cameraInput.value = "";
+  if (imagePreviewContainer) imagePreviewContainer.classList.add("hidden");
+  if (imagePreviewThumb) imagePreviewThumb.src = "";
+}
+
+// ==========================================================
+// HTML Live Viewer Functions
+// ==========================================================
+function openHtmlInViewer(htmlCode) {
+  latestHtmlOutput = htmlCode;
+  // Switch to HTML View tab
+  const htmlTabBtn = document.querySelector('.tab-btn[data-tab="htmlview"]');
+  if (htmlTabBtn) htmlTabBtn.click();
+  if (htmlSourceSelect) htmlSourceSelect.value = "__latest__";
+  renderHtmlInFrame(latestHtmlOutput);
+}
+
+async function loadHtmlView() {
+  await populateHtmlFilesDropdown();
+  const currentVal = htmlSourceSelect ? htmlSourceSelect.value : "__latest__";
+  if (currentVal === "__latest__") {
+    renderHtmlInFrame(latestHtmlOutput);
+  } else {
+    loadWorkspaceFileInFrame(currentVal);
+  }
+}
+
+async function populateHtmlFilesDropdown() {
+  if (!htmlSourceSelect) return;
+  try {
+    const res = await authFetch("/api/html_files");
+    const data = await res.json();
+    const files = data.files || [];
+    const currentVal = htmlSourceSelect.value;
+
+    let optionsHtml = '<option value="__latest__">✨ Latest Output in Chat</option>';
+    files.forEach(f => {
+      optionsHtml += `<option value="${escapeHtml(f.path)}">${escapeHtml(f.name)} (${escapeHtml(f.path)})</option>`;
+    });
+
+    htmlSourceSelect.innerHTML = optionsHtml;
+    if (currentVal && files.some(f => f.path === currentVal)) {
+      htmlSourceSelect.value = currentVal;
+    } else {
+      htmlSourceSelect.value = "__latest__";
+    }
+  } catch (e) {
+    console.error("Error loading html files:", e);
+  }
+}
+
+function renderHtmlInFrame(htmlCode) {
+  if (!htmlPreviewFrame) return;
+  if (!htmlCode || !htmlCode.trim()) {
+    htmlPreviewFrame.srcdoc = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; align-items: center; justify-content: center; height: 90vh; margin: 0; color: #64748b; text-align: center; background: #f8fafc; }
+          .card { padding: 30px; border-radius: 16px; border: 1px solid #e2e8f0; background: white; max-width: 320px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+          h2 { margin: 0 0 10px 0; color: #1e293b; font-size: 18px; }
+          p { margin: 0; font-size: 13px; line-height: 1.5; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h2>🌐 Live HTML View</h2>
+          <p>No HTML output has been generated in the chat yet.<br><br>Ask Antigravity to build a webpage, or select a workspace HTML file above!</p>
+        </div>
+      </body>
+      </html>
+    `;
+    return;
+  }
+  htmlPreviewFrame.removeAttribute("src");
+  htmlPreviewFrame.srcdoc = htmlCode;
+}
+
+function loadWorkspaceFileInFrame(filePath) {
+  if (!htmlPreviewFrame) return;
+  htmlPreviewFrame.removeAttribute("srcdoc");
+  htmlPreviewFrame.src = "/preview_file?path=" + encodeURIComponent(filePath);
+}
+
+if (htmlSourceSelect) {
+  htmlSourceSelect.addEventListener("change", (e) => {
+    const val = e.target.value;
+    if (val === "__latest__") {
+      renderHtmlInFrame(latestHtmlOutput);
+    } else {
+      loadWorkspaceFileInFrame(val);
+    }
+  });
+}
+
+if (htmlDeviceBtn) {
+  htmlDeviceBtn.addEventListener("click", () => {
+    isMobileHtmlFrame = !isMobileHtmlFrame;
+    if (htmlFrameContainer) {
+      if (isMobileHtmlFrame) {
+        htmlFrameContainer.classList.add("mobile-frame");
+        htmlDeviceBtn.innerHTML = "📱 Mobile";
+        htmlDeviceBtn.classList.add("active");
+      } else {
+        htmlFrameContainer.classList.remove("mobile-frame");
+        htmlDeviceBtn.innerHTML = "💻 Desktop";
+        htmlDeviceBtn.classList.remove("active");
+      }
+    }
+  });
+}
+
+if (htmlReloadBtn) {
+  htmlReloadBtn.addEventListener("click", () => {
+    const currentVal = htmlSourceSelect ? htmlSourceSelect.value : "__latest__";
+    if (currentVal === "__latest__") {
+      renderHtmlInFrame(latestHtmlOutput);
+    } else if (htmlPreviewFrame) {
+      htmlPreviewFrame.src = "/preview_file?path=" + encodeURIComponent(currentVal) + "&_t=" + Date.now();
+    }
+  });
+}
+
+if (htmlNewTabBtn) {
+  htmlNewTabBtn.addEventListener("click", () => {
+    const currentVal = htmlSourceSelect ? htmlSourceSelect.value : "__latest__";
+    if (currentVal === "__latest__") {
+      if (!latestHtmlOutput) {
+        alert("No HTML content to open.");
+        return;
+      }
+      const blob = new Blob([latestHtmlOutput], { type: "text/html" });
+      const blobUrl = URL.createObjectURL(blob);
+      window.open(blobUrl, "_blank");
+    } else {
+      window.open("/preview_file?path=" + encodeURIComponent(currentVal), "_blank");
+    }
+  });
 }

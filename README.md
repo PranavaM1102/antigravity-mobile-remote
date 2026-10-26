@@ -12,10 +12,19 @@
 
 ## ✨ Features
 
-- 🤖 **Telegram Bot Integration**:
+- 🤖 **Telegram Bot Integration (with Direct Output)**:
+  - When asked via `/ask` or photo message, streams tool execution status and **delivers Antigravity's final answer directly into Telegram**!
+  - Interactive session selector: choose current session, past sessions, or start a new task.
   - Receive instant push notifications with new links & QR codes whenever the PC reboots or server restarts.
-  - Commands: `/link` (current link & QR), `/status` (CPU, RAM, Disks), `/pin` (view/update PIN), `/ask` (command Antigravity), `/cmd` (run shell commands).
-  - Multi-user security: Authorize your chat simply by sending `/start <PIN>`.
+  - Commands: `/link`, `/status`, `/limits`, `/restart`, `/start_service`, `/stop`, `/pin`, `/ask`, `/cmd`.
+- 📷 **Direct Camera & Photo Input**:
+  - One-tap mobile camera capture (`capture="environment"`) to snap and attach photos directly from your phone.
+  - Instant image thumbnail preview before sending.
+  - Allows Antigravity to inspect and analyze hardware, error screens, and UI mockups.
+- 🌐 **Interactive HTML Live Viewer**:
+  - 1-tap **"Live Preview"** on any HTML code block in chat.
+  - Dedicated **HTML View** tab with responsive Mobile View (390px simulated phone) vs Desktop full-width toggle.
+  - Browse and preview any `.html` files in your workspace directly on mobile.
 - 🔒 **PIN Authentication & Privacy Protection**:
   - Built-in 4-digit PIN lock screen with haptic keypad.
   - Generates secure random session tokens stored in `localStorage`.

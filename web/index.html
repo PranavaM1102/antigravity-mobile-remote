@@ -68,6 +68,7 @@
   <!-- Tab Bar -->
   <nav class="tab-bar">
     <button class="tab-btn active" data-tab="chat">💬 Agent Chat</button>
+    <button class="tab-btn" data-tab="htmlview">🌐 HTML View</button>
     <button class="tab-btn" data-tab="terminal">💻 Shell</button>
     <button class="tab-btn" data-tab="info">📱 Connect & QR</button>
   </nav>
@@ -82,11 +83,46 @@
 
       <!-- Chat Input Bar -->
       <div class="chat-input-bar">
-        <button class="action-btn voice-btn" id="voiceBtn" title="Voice Input">🎙️</button>
+        <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none">
+        <div class="input-actions-left">
+          <button class="action-btn camera-btn" id="cameraBtn" title="Take Photo with Camera">📷</button>
+          <button class="action-btn voice-btn" id="voiceBtn" title="Voice Input">🎙️</button>
+        </div>
         <div class="input-container">
+          <!-- Image Attachment Preview -->
+          <div id="imagePreviewContainer" class="image-preview-container hidden">
+            <div class="image-preview-card">
+              <img id="imagePreviewThumb" src="" alt="Photo preview">
+              <button id="removeImageBtn" class="remove-image-btn" type="button" title="Remove photo">✕</button>
+            </div>
+            <span class="image-preview-text">📸 Photo attached</span>
+          </div>
           <textarea id="promptInput" rows="1" placeholder="Command Antigravity..."></textarea>
         </div>
         <button class="action-btn send-btn" id="sendBtn" title="Send Command">🚀</button>
+      </div>
+    </section>
+
+    <!-- TAB: HTML Live View -->
+    <section class="tab-pane" id="htmlviewPane">
+      <div class="html-toolbar">
+        <div class="html-source-wrap">
+          <label for="htmlSourceSelect" class="html-label">Page:</label>
+          <select id="htmlSourceSelect" title="Select HTML Page to Preview">
+            <option value="__latest__">✨ Latest Output in Chat</option>
+          </select>
+        </div>
+        <div class="html-btn-group">
+          <button class="html-tool-btn active" id="htmlDeviceBtn" title="Toggle Mobile (390px) / Full Desktop View">📱 Mobile</button>
+          <button class="html-tool-btn" id="htmlReloadBtn" title="Reload Preview">🔄</button>
+          <button class="html-tool-btn" id="htmlNewTabBtn" title="Open in New Tab">↗️</button>
+        </div>
+      </div>
+
+      <div class="html-preview-stage" id="htmlPreviewStage">
+        <div class="html-frame-container mobile-frame" id="htmlFrameContainer">
+          <iframe id="htmlPreviewFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals" title="HTML Live Preview"></iframe>
+        </div>
       </div>
     </section>
 
