@@ -19,8 +19,12 @@ import urllib.parse
 import subprocess
 import threading
 import uuid
+import html
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 CONFIG_FILE = os.path.join(BASE_DIR, "telegram_config.json")
 TUNNEL_FILE = os.path.join(BASE_DIR, "tunnel_url.txt")
 PIN_FILE = os.path.join(BASE_DIR, "pin.txt")
@@ -28,6 +32,9 @@ QR_FILE = os.path.join(BASE_DIR, "qr_internet.png")
 SERVER_PY = os.path.join(BASE_DIR, "server.py")
 AGENTAPI_BAT = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "bin", "agentapi.bat")
 WORKSPACE_DIR = r"D:\_ide\Antigravity"
+
+def escape_html(text):
+    return html.escape(str(text)) if text else ""
 
 DEFAULT_KEYBOARD = {
     "keyboard": [
@@ -150,6 +157,7 @@ class TelegramBot:
         self.config = load_config()
         self.running = True
         self.is_restarting = False
+        self.pending_prompts = {}
 
     def call_api(self, endpoint, data=None, files=None):
         url = f"{self.api_url}/{endpoint}"
@@ -168,15 +176,37 @@ class TelegramBot:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    def send_message(self, chat_id, text, parse_mode="HTML", with_keyboard=True):
+    def send_message(self, chat_id, text, parse_mode="HTML", with_keyboard=True, reply_markup=None):
         payload = {
             "chat_id": chat_id,
             "text": text,
             "parse_mode": parse_mode
         }
-        if with_keyboard:
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        elif with_keyboard:
             payload["reply_markup"] = DEFAULT_KEYBOARD
         return self.call_api("sendMessage", payload)
+
+    def edit_message_text(self, chat_id, message_id, text, parse_mode="HTML", reply_markup=None):
+        payload = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": parse_mode
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        return self.call_api("editMessageText", payload)
+
+    def answer_callback_query(self, callback_query_id, text=None, show_alert=False):
+        payload = {
+            "callback_query_id": callback_query_id
+        }
+        if text:
+            payload["text"] = text
+            payload["show_alert"] = show_alert
+        return self.call_api("answerCallbackQuery", payload)
 
     def send_photo(self, chat_id, photo_path, caption="", with_keyboard=True):
         if not os.path.isfile(photo_path):
@@ -505,22 +535,144 @@ class TelegramBot:
             self.send_message(chat_id, f"❌ Error: {e}")
 
     def cmd_ask(self, chat_id, prompt):
-        if not prompt:
-            self.send_message(chat_id, "Usage: <code>/ask &lt;instruction for Antigravity&gt;</code>")
-            return
-        
-        from server import get_latest_conversation_id
-        cid = get_latest_conversation_id()
-        if not cid:
-            self.send_message(chat_id, "❌ No active Antigravity session found.")
+        if not prompt or not prompt.strip():
+            self.send_message(
+                chat_id,
+                "💡 <b>Usage:</b> <code>/ask &lt;instruction for Antigravity&gt;</code>\n\n"
+                "Example: <code>/ask Add dark mode toggle</code>\n"
+                "The bot will ask you which session to send the prompt to!"
+            )
             return
 
-        self.send_message(chat_id, f"🚀 <b>Sending to Antigravity:</b>\n<i>{prompt}</i>")
+        clean_prompt = prompt.strip()
+        self.pending_prompts[str(chat_id)] = clean_prompt
+
         try:
-            subprocess.run([AGENTAPI_BAT, "send-message", cid, prompt], capture_output=True, text=True, timeout=15)
-            self.send_message(chat_id, "✅ Instruction received by Antigravity! Watch progress in your mobile link.")
-        except Exception as e:
-            self.send_message(chat_id, f"❌ Error delivering message: {e}")
+            from server import list_conversations
+            convs = list_conversations()
+        except Exception:
+            convs = []
+
+        keyboard = []
+        sessions_summary = []
+
+        # Offer up to top 4 recent conversations
+        for idx, c in enumerate(convs[:4], 1):
+            cid = c.get("id", "")
+            raw_title = c.get("title", cid[:8])
+            is_curr = c.get("is_current", False)
+
+            icon = "⭐" if is_curr else f"{idx}️⃣"
+            prefix = "[Current] " if is_curr else ""
+
+            # Label for inline button (short enough for mobile screen)
+            btn_title = raw_title if len(raw_title) <= 26 else (raw_title[:25] + "…")
+            btn_text = f"{icon} {prefix}{btn_title}"
+            keyboard.append([{"text": btn_text, "callback_data": f"ask_cid:{cid}"}])
+
+            desc = f"{icon} <b>{prefix}{escape_html(raw_title)}</b>"
+            sessions_summary.append(desc)
+
+        keyboard.append([{"text": "✨ Start New Session", "callback_data": "ask_cid:new"}])
+        keyboard.append([{"text": "❌ Cancel", "callback_data": "ask_cid:cancel"}])
+
+        preview_prompt = clean_prompt if len(clean_prompt) <= 120 else (clean_prompt[:117] + "...")
+        sessions_block = "\n".join(sessions_summary) if sessions_summary else "<i>No existing sessions found</i>"
+
+        msg = (
+            f"🎯 <b>Select Destination Session for Prompt:</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"💬 <i>\"{escape_html(preview_prompt)}\"</i>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Recent Sessions:</b>\n{sessions_block}\n\n"
+            f"👇 <i>Tap a button below to dispatch this prompt:</i>"
+        )
+
+        self.send_message(chat_id, msg, reply_markup={"inline_keyboard": keyboard})
+
+    def handle_callback(self, cb):
+        cb_id = cb.get("id")
+        data = cb.get("data", "")
+        msg = cb.get("message", {})
+        chat_id = msg.get("chat", {}).get("id")
+        message_id = msg.get("message_id")
+
+        if not cb_id:
+            return
+
+        # Acknowledge immediately to stop loading spinner
+        self.answer_callback_query(cb_id)
+
+        if not chat_id or not self.is_authorized(chat_id):
+            return
+
+        if not data.startswith("ask_cid:"):
+            return
+
+        target = data[len("ask_cid:"):]
+        chat_id_str = str(chat_id)
+        prompt = self.pending_prompts.pop(chat_id_str, None)
+
+        if target == "cancel":
+            self.edit_message_text(
+                chat_id,
+                message_id,
+                "❌ <b>Prompt cancelled.</b> No message was sent.",
+                reply_markup={"inline_keyboard": []}
+            )
+            return
+
+        if not prompt:
+            self.edit_message_text(
+                chat_id,
+                message_id,
+                "⚠️ <b>Prompt expired or already sent.</b>\nPlease type <code>/ask &lt;prompt&gt;</code> to try again.",
+                reply_markup={"inline_keyboard": []}
+            )
+            return
+
+        safe_prompt = escape_html(prompt[:120] + ("..." if len(prompt) > 120 else ""))
+
+        if target == "new":
+            self.edit_message_text(
+                chat_id,
+                message_id,
+                f"✨ <b>Starting New Antigravity Session...</b>\n\n💬 <i>\"{safe_prompt}\"</i>\n\n⏳ Spawning new session with agentapi...",
+                reply_markup={"inline_keyboard": []}
+            )
+            def run_new():
+                try:
+                    res = subprocess.run([AGENTAPI_BAT, "new-conversation", prompt], capture_output=True, text=True, timeout=25)
+                    self.send_message(
+                        chat_id,
+                        f"✅ <b>New Session Started!</b>\n"
+                        f"💬 <i>\"{safe_prompt}\"</i>\n\n"
+                        f"Antigravity is working in the new session. Tap <b>🔗 Get Link</b> or <b>📈 Limits</b> to track progress."
+                    )
+                except Exception as e:
+                    self.send_message(chat_id, f"❌ Failed to create new session: {escape_html(str(e))}")
+            threading.Thread(target=run_new, daemon=True).start()
+
+        else:
+            cid = target
+            self.edit_message_text(
+                chat_id,
+                message_id,
+                f"🚀 <b>Dispatching to Session</b> <code>{cid[:8]}</code>...\n\n💬 <i>\"{safe_prompt}\"</i>\n\n⏳ Delivering prompt via agentapi...",
+                reply_markup={"inline_keyboard": []}
+            )
+            def run_send():
+                try:
+                    res = subprocess.run([AGENTAPI_BAT, "send-message", cid, prompt], capture_output=True, text=True, timeout=20)
+                    self.send_message(
+                        chat_id,
+                        f"✅ <b>Prompt Delivered to Session <code>{cid[:8]}</code>!</b>\n"
+                        f"💬 <i>\"{safe_prompt}\"</i>\n\n"
+                        f"Antigravity has received your instruction. Monitor response via your mobile link."
+                    )
+                except Exception as e:
+                    self.send_message(chat_id, f"❌ Failed delivering message: {escape_html(str(e))}")
+            threading.Thread(target=run_send, daemon=True).start()
 
     def cmd_help(self, chat_id):
         msg = (
@@ -534,7 +686,7 @@ class TelegramBot:
             f"🛑 <b>/stop</b> - Stop mobile server &amp; tunnel\n"
             f"🔑 <b>/pin [new_pin]</b> - View or update security PIN\n"
             f"💻 <b>/cmd &lt;command&gt;</b> - Run PowerShell on workstation\n"
-            f"🤖 <b>/ask &lt;prompt&gt;</b> - Command Antigravity coding agent\n"
+            f"🤖 <b>/ask &lt;prompt&gt;</b> - Send prompt (interactive session picker)\n"
             f"━━━━━━━━━━━━━━━━━━━"
         )
         self.send_message(chat_id, msg)
@@ -582,6 +734,10 @@ class TelegramBot:
                 if updates.get("ok"):
                     for item in updates.get("result", []):
                         self.last_update_id = item["update_id"]
+                        cb = item.get("callback_query")
+                        if cb:
+                            self.handle_callback(cb)
+                            continue
                         msg = item.get("message")
                         if msg and "text" in msg:
                             chat_id = msg["chat"]["id"]

@@ -133,7 +133,11 @@ You can receive your latest tunnel link and system status directly in Telegram:
 | `/status` | Live PC health metrics (RAM, CPU, free disk space on C: and D:) |
 | `/pin [code]` | Check current PIN or update it |
 | `/cmd <cmd>` | Execute a PowerShell command on the workstation and view output |
-| `/ask <prompt>` | Send a coding instruction directly to Antigravity |
+| /limits | AI context window consumption, tokens used, and workstation RAM/Disk |
+| /restart | Restart mobile service and generate a fresh tunnel |
+| /start_service | Launch mobile service if stopped |
+| /stop | Stop mobile service and tunnel |
+| /ask <prompt> | Interactive session picker: choose current session, past sessions, or start a new task |
 | `/help` | Display command list |
 
 ---
