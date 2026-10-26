@@ -216,6 +216,8 @@ async function fetchLimits() {
     const res = await authFetch("/api/limits");
     if (!res.ok) return;
     const data = await res.json();
+    const r5 = data.rolling_5h || {};
+    const rw = data.rolling_week || {};
     
     let disksHtml = (data.disks || []).map(d => `
       <div style="display:flex; justify-content:space-between; margin-top:2px;">
@@ -225,50 +227,92 @@ async function fetchLimits() {
     `).join("");
 
     container.innerHTML = `
-      <div style="background:var(--bg-tertiary); padding:10px; border-radius:8px; border:1px solid var(--border-color);">
-        <div style="display:flex; justify-content:space-between; font-weight:600; margin-bottom:4px;">
-          <span>🧠 Model Context Window:</span>
-          <span style="color:var(--accent-green);">${data.context_used_pct} used</span>
+      <!-- 5-Hour Rolling Limit Card -->
+      <div style="background:var(--bg-tertiary); padding:12px; border-radius:10px; border:1px solid var(--border-color);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-weight:600; color:#38bdf8;">⏱️ 5-Hour Rolling Limit:</span>
+          <span style="background:rgba(56, 189, 248, 0.15); color:#38bdf8; font-size:11px; padding:2px 6px; border-radius:4px; font-weight:600;">
+            ${r5.left_requests || 0} requests left
+          </span>
         </div>
-        <div style="background:#0d1117; height:6px; border-radius:3px; overflow:hidden; margin:4px 0 6px 0;">
-          <div style="width:${data.context_used_pct}; background:var(--accent-green); height:100%;"></div>
+        <div style="background:#0d1117; height:8px; border-radius:4px; overflow:hidden; margin:6px 0;">
+          <div style="width:${r5.used_pct || '0%'}; background:${parseFloat(r5.used_pct) > 80 ? 'var(--accent-red)' : 'var(--accent-blue)'}; height:100%; border-radius:4px;"></div>
         </div>
         <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); font-family:var(--font-mono);">
-          <span>Turn Input: ${Number(data.context_tokens).toLocaleString()} tokens</span>
-          <span>Max Limit: ${Number(data.context_limit).toLocaleString()} tokens</span>
+          <span>Used: ${r5.used_requests || 0} / ${r5.limit_requests || 250} (${r5.used_pct || '0%'})</span>
+          <span>Earliest Reset: <b style="color:#e2e8f0;">${r5.resets_in || 'Rolling'}</b></span>
+        </div>
+        <div style="margin-top:4px; font-size:11px; color:var(--text-muted); font-family:var(--font-mono);">
+          <span>5h Tokens: ${Number(r5.total_tokens || 0).toLocaleString()} tokens</span>
         </div>
       </div>
 
-      <div style="background:var(--bg-tertiary); padding:10px; border-radius:8px; border:1px solid var(--border-color);">
-        <div style="font-weight:600; margin-bottom:6px; color:var(--accent-blue);">⚡ Session Token Consumption:</div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
-          <span style="color:var(--text-muted);">Total Consumed:</span>
-          <span style="font-family:var(--font-mono); font-weight:600; color:#fff;">${Number(data.session_total_tokens).toLocaleString()} tokens</span>
+      <!-- Weekly Rolling Limit Card -->
+      <div style="background:var(--bg-tertiary); padding:12px; border-radius:10px; border:1px solid var(--border-color);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-weight:600; color:var(--accent-purple);">📅 Weekly Limit (7-Day Rolling):</span>
+          <span style="background:rgba(168, 85, 247, 0.15); color:#c084fc; font-size:11px; padding:2px 6px; border-radius:4px; font-weight:600;">
+            ${rw.left_requests || 0} requests left
+          </span>
         </div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+        <div style="background:#0d1117; height:8px; border-radius:4px; overflow:hidden; margin:6px 0;">
+          <div style="width:${rw.used_pct || '0%'}; background:${parseFloat(rw.used_pct) > 85 ? 'var(--accent-red)' : 'var(--accent-purple)'}; height:100%; border-radius:4px;"></div>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); font-family:var(--font-mono);">
+          <span>Used: ${rw.used_requests || 0} / ${rw.limit_requests || 1500} (${rw.used_pct || '0%'})</span>
+          <span>7d Tokens: ${Number(rw.total_tokens || 0).toLocaleString()}</span>
+        </div>
+      </div>
+
+      <!-- Session Context Window Card -->
+      <div style="background:var(--bg-tertiary); padding:12px; border-radius:10px; border:1px solid var(--border-color);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-weight:600; color:var(--accent-green);">🧠 Context Window (${data.model || 'Gemini'}):</span>
+          <span style="color:var(--accent-green); font-size:11px; font-weight:600;">${Number(data.context_left_tokens || 0).toLocaleString()} tokens left</span>
+        </div>
+        <div style="background:#0d1117; height:8px; border-radius:4px; overflow:hidden; margin:6px 0;">
+          <div style="width:${data.context_used_pct || '0%'}; background:var(--accent-green); height:100%; border-radius:4px;"></div>
+        </div>
+        <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted); font-family:var(--font-mono);">
+          <span>Used: ${Number(data.context_tokens || 0).toLocaleString()} (${data.context_used_pct})</span>
+          <span>Max Limit: ${Number(data.context_limit || 1048576).toLocaleString()}</span>
+        </div>
+      </div>
+
+      <!-- Session Tokens & Hardware Metrics -->
+      <div style="background:var(--bg-tertiary); padding:12px; border-radius:10px; border:1px solid var(--border-color);">
+        <div style="font-weight:600; margin-bottom:6px; color:#38bdf8;">⚡ Session Token Breakdown:</div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:11px;">
+          <span style="color:var(--text-muted);">Session Total:</span>
+          <span style="font-family:var(--font-mono); font-weight:600; color:#fff;">${Number(data.session_total_tokens || 0).toLocaleString()} tokens (${data.session_steps || 0} steps)</span>
+        </div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:11px;">
           <span style="color:var(--text-muted);">Prompt Input:</span>
-          <span style="font-family:var(--font-mono);">${Number(data.session_input_tokens).toLocaleString()}</span>
+          <span style="font-family:var(--font-mono);">${Number(data.session_input_tokens || 0).toLocaleString()}</span>
         </div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:3px; font-size:11px;">
           <span style="color:var(--text-muted);">Model Output:</span>
-          <span style="font-family:var(--font-mono);">${Number(data.session_output_tokens).toLocaleString()}</span>
+          <span style="font-family:var(--font-mono);">${Number(data.session_output_tokens || 0).toLocaleString()}</span>
         </div>
-        <div style="display:flex; justify-content:space-between;">
+        <div style="display:flex; justify-content:space-between; font-size:11px;">
           <span style="color:var(--text-muted);">Cache Read:</span>
-          <span style="font-family:var(--font-mono); color:var(--accent-purple);">${Number(data.session_cache_read_tokens).toLocaleString()}</span>
+          <span style="font-family:var(--font-mono); color:var(--accent-purple);">${Number(data.session_cache_read_tokens || 0).toLocaleString()}</span>
         </div>
       </div>
 
-      <div style="background:var(--bg-tertiary); padding:10px; border-radius:8px; border:1px solid var(--border-color);">
-        <div style="font-weight:600; margin-bottom:6px; color:var(--accent-orange);">🖥️ Workstation Hardware Limits:</div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+      <!-- Workstation Limits -->
+      <div style="background:var(--bg-tertiary); padding:12px; border-radius:10px; border:1px solid var(--border-color);">
+        <div style="font-weight:600; margin-bottom:6px; color:#94a3b8;">🖥️ Workstation Hardware Limits:</div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:11px;">
           <span style="color:var(--text-muted);">RAM Usage:</span>
           <span style="font-family:var(--font-mono);">${data.ram?.used_gb}GB / ${data.ram?.total_gb}GB (${data.ram?.pct})</span>
         </div>
         ${disksHtml}
       </div>
     `;
-  } catch(e) {}
+  } catch(e) {
+    console.error("Error fetching limits:", e);
+  }
 }
 
 // Load Conversations Dropdown

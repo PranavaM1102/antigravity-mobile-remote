@@ -25,6 +25,7 @@ from urllib.parse import urlparse, parse_qs
 
 import base64
 import uuid
+import shutil
 
 PORT = int(os.environ.get("PORT", 8080))
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -367,6 +368,90 @@ def get_transcript(conv_id, since_index=0):
     return {"steps": messages, "total_raw_steps": len(steps)}
 
 def get_limit_metrics():
+    import glob
+    from datetime import datetime, timezone, timedelta
+
+    now = datetime.now(timezone.utc)
+    t_5h = now - timedelta(hours=5)
+    t_24h = now - timedelta(hours=24)
+    t_7d = now - timedelta(days=7)
+
+    req_5h_ts = []
+    in_5h = 0
+    out_5h = 0
+    cache_5h = 0
+
+    req_24h_count = 0
+    in_24h = 0
+    out_24h = 0
+
+    req_7d_count = 0
+    in_7d = 0
+    out_7d = 0
+    cache_7d = 0
+
+    # Scan transcripts across all conversations
+    for cpath in glob.glob(os.path.join(BRAIN_DIR, "*", ".system_generated", "logs", "transcript.jsonl")):
+        try:
+            with open(cpath, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    obj = json.loads(line)
+                    if obj.get("type") == "PLANNER_RESPONSE":
+                        ts_str = obj.get("created_at")
+                        if not ts_str:
+                            continue
+                        try:
+                            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                        except Exception:
+                            continue
+
+                        inp = obj.get("input_tokens", 0)
+                        out = obj.get("output_tokens", 0)
+                        cache = obj.get("cache_read_tokens", 0)
+
+                        if ts >= t_7d:
+                            req_7d_count += 1
+                            in_7d += inp
+                            out_7d += out
+                            cache_7d += cache
+
+                        if ts >= t_24h:
+                            req_24h_count += 1
+                            in_24h += inp
+                            out_24h += out
+
+                        if ts >= t_5h:
+                            req_5h_ts.append(ts)
+                            in_5h += inp
+                            out_5h += out
+                            cache_5h += cache
+        except Exception:
+            pass
+
+    # 5-Hour rolling window (Threshold: 250 requests)
+    limit_5h_req = 250
+    used_5h_req = len(req_5h_ts)
+    left_5h_req = max(0, limit_5h_req - used_5h_req)
+    pct_5h_req = min(100.0, round((used_5h_req / limit_5h_req) * 100, 1))
+
+    resets_5h_str = "Rolling window"
+    if req_5h_ts:
+        oldest_5h = min(req_5h_ts)
+        roll_off = oldest_5h + timedelta(hours=5)
+        rem_secs = max(0, int((roll_off - now).total_seconds()))
+        hrs = rem_secs // 3600
+        mins = (rem_secs % 3600) // 60
+        resets_5h_str = f"{hrs}h {mins}m" if hrs > 0 else f"{mins}m"
+
+    # Weekly rolling window (Threshold: 1,500 requests)
+    limit_7d_req = 1500
+    used_7d_req = req_7d_count
+    left_7d_req = max(0, limit_7d_req - used_7d_req)
+    pct_7d_req = min(100.0, round((used_7d_req / limit_7d_req) * 100, 1))
+
+    # Active conversation metrics
     cid = get_latest_conversation_id()
     cpath = os.path.join(BRAIN_DIR, cid, ".system_generated", "logs", "transcript.jsonl") if cid else ""
     session_in = 0
@@ -394,7 +479,8 @@ def get_limit_metrics():
         except Exception:
             pass
 
-    context_max = 1048576  # 1M context limit for Gemini
+    context_max = 1048576  # 1M context limit for Gemini 3.8 Flash
+    context_left = max(0, context_max - last_input_tokens)
     context_pct = round((last_input_tokens / context_max) * 100, 2)
 
     ram_used_gb = 0
@@ -414,12 +500,13 @@ def get_limit_metrics():
         pass
 
     disks = []
-    for d in ["C:", "D:"]:
+    for d in ["C:\\", "D:\\"]:
+        drive_letter = d[0] + ":"
         if os.path.exists(d):
             try:
                 tot, used, free = shutil.disk_usage(d)
                 disks.append({
-                    "drive": d,
+                    "drive": drive_letter,
                     "used_gb": round(used / 2**30, 1),
                     "total_gb": round(tot / 2**30, 1),
                     "free_gb": round(free / 2**30, 1),
@@ -431,8 +518,30 @@ def get_limit_metrics():
     return {
         "model": "Gemini 3.8 Flash (High)",
         "active_conversation_id": cid,
+        "rolling_5h": {
+            "used_requests": used_5h_req,
+            "limit_requests": limit_5h_req,
+            "left_requests": left_5h_req,
+            "used_pct": f"{pct_5h_req}%",
+            "resets_in": resets_5h_str,
+            "input_tokens": in_5h,
+            "output_tokens": out_5h,
+            "cache_tokens": cache_5h,
+            "total_tokens": in_5h + out_5h
+        },
+        "rolling_week": {
+            "used_requests": used_7d_req,
+            "limit_requests": limit_7d_req,
+            "left_requests": left_7d_req,
+            "used_pct": f"{pct_7d_req}%",
+            "input_tokens": in_7d,
+            "output_tokens": out_7d,
+            "cache_tokens": cache_7d,
+            "total_tokens": in_7d + out_7d
+        },
         "context_tokens": last_input_tokens,
         "context_limit": context_max,
+        "context_left_tokens": context_left,
         "context_used_pct": f"{context_pct}%",
         "session_input_tokens": session_in,
         "session_output_tokens": session_out,

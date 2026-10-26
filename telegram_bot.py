@@ -402,16 +402,27 @@ class TelegramBot:
     def cmd_limits(self, chat_id):
         from server import get_limit_metrics
         lim = get_limit_metrics()
+        r5 = lim.get("rolling_5h", {})
+        rw = lim.get("rolling_week", {})
         disks_str = "\n".join([f"  • <b>{d['drive']}</b>: {d['free_gb']}GB free / {d['total_gb']}GB ({d['used_pct']}%)" for d in lim.get("disks", [])])
+
         msg = (
-            f"📊 <b>Current Limit &amp; Quota Usage:</b>\n"
+            f"📊 <b>Antigravity Model Quotas &amp; Usage Limits:</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🧠 <b>Model:</b> <code>{lim['model']}</code>\n"
-            f"📏 <b>Context Window:</b> <code>{lim['context_tokens']:,} / {lim['context_limit']:,} ({lim['context_used_pct']})</code>\n"
-            f"📥 <b>Input Tokens:</b> <code>{lim['session_input_tokens']:,}</code>\n"
-            f"📤 <b>Output Tokens:</b> <code>{lim['session_output_tokens']:,}</code>\n"
-            f"⚡ <b>Cache Read:</b> <code>{lim['session_cache_read_tokens']:,}</code>\n"
-            f"🔄 <b>Session Total:</b> <code>{lim['session_total_tokens']:,} tokens ({lim['session_steps']} steps)</code>\n"
+            f"⏱️ <b>5-Hour Rolling Limit (Burst Quota):</b>\n"
+            f"  • Remaining: <b>{r5.get('left_requests', 0)} requests left</b>\n"
+            f"  • Consumed: {r5.get('used_requests', 0)} / {r5.get('limit_requests', 250)} ({r5.get('used_pct', '0%')})\n"
+            f"  • 5h Tokens: {r5.get('total_tokens', 0):,} tokens\n"
+            f"  • Earliest Reset: in <b>{r5.get('resets_in', 'Rolling')}</b>\n\n"
+            f"📅 <b>Weekly Limit (7-Day Rolling):</b>\n"
+            f"  • Remaining: <b>{rw.get('left_requests', 0)} requests left</b>\n"
+            f"  • Consumed: {rw.get('used_requests', 0)} / {rw.get('limit_requests', 1500)} ({rw.get('used_pct', '0%')})\n"
+            f"  • 7d Tokens: {rw.get('total_tokens', 0):,} tokens\n\n"
+            f"🧠 <b>Session Context Window:</b>\n"
+            f"  • Model: <code>{lim['model']}</code>\n"
+            f"  • Context Left: <b>{lim.get('context_left_tokens', 0):,} tokens left</b>\n"
+            f"  • Context Used: {lim['context_tokens']:,} / {lim['context_limit']:,} ({lim['context_used_pct']})\n"
+            f"  • Session Total: {lim['session_total_tokens']:,} tokens ({lim['session_steps']} turns)\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🖥️ <b>Workstation Limits:</b>\n"
             f"⚡ <b>RAM:</b> <code>{lim['ram']['used_gb']}GB / {lim['ram']['total_gb']}GB ({lim['ram']['pct']})</code>\n"
