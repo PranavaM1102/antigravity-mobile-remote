@@ -20,7 +20,7 @@ import urllib.parse
 import urllib.request
 import subprocess
 import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 PORT = int(os.environ.get("PORT", 8080))
@@ -421,7 +421,10 @@ class RemoteHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Auth-Token")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except Exception:
+            pass
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -625,6 +628,8 @@ class RemoteHandler(BaseHTTPRequestHandler):
             self.send_error(500, f"Error reading file: {e}")
 
 def start_telegram_bot_service():
+    if '--from-bot' in sys.argv:
+        return None
     cfg_file = os.path.join(BASE_DIR, "telegram_config.json")
     if os.path.isfile(cfg_file):
         try:
@@ -643,7 +648,7 @@ def start_telegram_bot_service():
 
 def run_server():
     server_address = ("0.0.0.0", PORT)
-    httpd = HTTPServer(server_address, RemoteHandler)
+    httpd = ThreadingHTTPServer(server_address, RemoteHandler)
     
     # Start Cloudflare Tunnel for Cellular/Anywhere access
     start_cloudflared_tunnel()

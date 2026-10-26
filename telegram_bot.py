@@ -1,8 +1,9 @@
 """
-Antigravity Telegram Bot
-========================
+Antigravity Telegram Bot (Supervisor & Controller)
+=================================================
 Provides real-time system monitoring, instant links, QR codes,
-PIN management, and remote execution directly via Telegram.
+PIN management, remote execution, and service start/stop/restart
+controls directly via Telegram with custom keyboard buttons.
 
 Zero external dependencies required (Pure Python 3 standard library).
 """
@@ -24,8 +25,18 @@ CONFIG_FILE = os.path.join(BASE_DIR, "telegram_config.json")
 TUNNEL_FILE = os.path.join(BASE_DIR, "tunnel_url.txt")
 PIN_FILE = os.path.join(BASE_DIR, "pin.txt")
 QR_FILE = os.path.join(BASE_DIR, "qr_internet.png")
+SERVER_PY = os.path.join(BASE_DIR, "server.py")
 AGENTAPI_BAT = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "bin", "agentapi.bat")
 WORKSPACE_DIR = r"D:\_ide\Antigravity"
+
+DEFAULT_KEYBOARD = {
+    "keyboard": [
+        [{"text": "🔗 Get Link"}, {"text": "📊 Status"}, {"text": "📈 Limits"}],
+        [{"text": "🔄 Restart Service"}, {"text": "🟢 Start Service"}, {"text": "🛑 Stop Service"}]
+    ],
+    "resize_keyboard": True,
+    "is_persistent": True
+}
 
 def load_config():
     default_config = {
@@ -68,39 +79,47 @@ def get_tunnel_url():
             pass
     return None
 
-def get_system_status():
-    metrics = {
-        "hostname": socket.gethostname(),
-        "ram": "Unknown",
-        "disks": [],
-        "tunnel": get_tunnel_url() or "Offline / Starting...",
-        "pin": get_current_pin(),
-        "time": time.strftime("%Y-%m-%d %H:%M:%S")
-    }
-
-    # RAM
+def is_server_running():
     try:
-        ps_cmd = "Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize, FreePhysicalMemory | ConvertTo-Json"
-        res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, timeout=5)
-        mem = json.loads(res.stdout)
-        total_mb = mem["TotalVisibleMemorySize"] // 1024
-        free_mb = mem["FreePhysicalMemory"] // 1024
-        used_mb = total_mb - free_mb
-        ram_pct = int((used_mb / total_mb) * 100)
-        metrics["ram"] = f"{round(used_mb/1024, 1)}GB / {round(total_mb/1024, 1)}GB ({ram_pct}%)"
+        s = socket.create_connection(("127.0.0.1", 8080), timeout=1)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+def stop_server_service():
+    # 1. Kill cloudflared
+    try:
+        subprocess.run(["powershell", "-Command", "Stop-Process -Name 'cloudflared' -Force -ErrorAction SilentlyContinue"], timeout=5)
     except Exception:
         pass
+    # 2. Kill port 8080 listeners
+    try:
+        subprocess.run(["powershell", "-Command", "Get-NetTCPConnection -LocalPort 8080 -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }"], timeout=5)
+    except Exception:
+        pass
+    time.sleep(1)
 
-    # Disks
-    for d in ["C:", "D:"]:
-        if os.path.exists(d):
-            try:
-                tot, used, free = shutil.disk_usage(d)
-                metrics["disks"].append(f"{d} {free // (2**30)}GB free of {tot // (2**30)}GB")
-            except Exception:
-                pass
+def start_server_service():
+    if is_server_running():
+        return True
 
-    return metrics
+    flags = 0
+    if sys.platform == "win32":
+        flags = subprocess.CREATE_NEW_PROCESS_GROUP | getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+
+    cmd = [sys.executable, SERVER_PY, "--from-bot"]
+    try:
+        subprocess.Popen(
+            cmd,
+            cwd=BASE_DIR,
+            creationflags=flags,
+            close_fds=True
+        )
+        return True
+    except Exception as e:
+        print(f"Error launching server: {e}")
+        return False
 
 def multipart_encode(fields, files):
     boundary = uuid.uuid4().hex
@@ -130,6 +149,7 @@ class TelegramBot:
         self.last_update_id = 0
         self.config = load_config()
         self.running = True
+        self.is_restarting = False
 
     def call_api(self, endpoint, data=None, files=None):
         url = f"{self.api_url}/{endpoint}"
@@ -148,26 +168,32 @@ class TelegramBot:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    def send_message(self, chat_id, text, parse_mode="HTML"):
-        return self.call_api("sendMessage", {
+    def send_message(self, chat_id, text, parse_mode="HTML", with_keyboard=True):
+        payload = {
             "chat_id": chat_id,
             "text": text,
             "parse_mode": parse_mode
-        })
+        }
+        if with_keyboard:
+            payload["reply_markup"] = DEFAULT_KEYBOARD
+        return self.call_api("sendMessage", payload)
 
-    def send_photo(self, chat_id, photo_path, caption=""):
+    def send_photo(self, chat_id, photo_path, caption="", with_keyboard=True):
         if not os.path.isfile(photo_path):
-            return self.send_message(chat_id, caption)
+            return self.send_message(chat_id, caption, with_keyboard=with_keyboard)
         try:
             with open(photo_path, "rb") as f:
                 photo_data = f.read()
+            data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+            if with_keyboard:
+                data["reply_markup"] = json.dumps(DEFAULT_KEYBOARD)
             return self.call_api(
                 "sendPhoto",
-                data={"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"},
+                data=data,
                 files={"photo": ("qr.png", photo_data, "image/png")}
             )
         except Exception as e:
-            return self.send_message(chat_id, f"{caption}\n(Error sending QR image: {e})")
+            return self.send_message(chat_id, f"{caption}\n(Error sending QR image: {e})", with_keyboard=with_keyboard)
 
     def broadcast(self, text, photo_path=None):
         for cid in self.config.get("allowed_chat_ids", []):
@@ -188,10 +214,10 @@ class TelegramBot:
             save_config(self.config)
 
     def handle_command(self, chat_id, text):
-        parts = text.strip().split()
+        clean_text = text.strip()
+        parts = clean_text.split()
         cmd = parts[0].lower() if parts else ""
         args = parts[1:] if len(parts) > 1 else []
-
         current_pin = get_current_pin()
 
         # Authorization via PIN
@@ -200,36 +226,46 @@ class TelegramBot:
                 self.authorize_chat(chat_id)
                 self.send_message(
                     chat_id,
-                    f"✅ <b>Access Granted!</b>\nYour Telegram chat is now authorized to monitor and control your Antigravity workstation.\n\nType /help to see all commands."
+                    f"✅ <b>Access Granted!</b>\nYour Telegram chat is authorized to control your Antigravity workstation.\n\nUse the buttons below or type /help to get started."
                 )
                 self.cmd_link(chat_id)
                 return
             elif self.is_authorized(chat_id):
                 self.send_message(
                     chat_id,
-                    "👋 <b>Welcome back!</b>\nYour chat is already authorized. Type /help to see available commands."
+                    "👋 <b>Welcome back!</b>\nYour chat is authorized. Use the control buttons below."
                 )
                 self.cmd_link(chat_id)
                 return
             else:
                 self.send_message(
                     chat_id,
-                    f"🔒 <b>Authentication Required</b>\nPlease send your 4-digit PIN to authorize this chat:\n<code>/start &lt;YOUR_PIN&gt;</code>\n\nExample: <code>/start 2486</code>"
+                    f"🔒 <b>Authentication Required</b>\nPlease send your 4-digit PIN to authorize this chat:\n<code>/start &lt;PIN&gt;</code>\n\nExample: <code>/start {current_pin}</code>",
+                    with_keyboard=False
                 )
                 return
 
         # Check authorization for all other commands
         if not self.is_authorized(chat_id):
-            if cmd == current_pin or (args and args[0] == current_pin):
+            if clean_text == current_pin or (args and args[0] == current_pin):
                 self.authorize_chat(chat_id)
                 self.send_message(chat_id, "✅ <b>Access Granted!</b> Your chat has been verified.")
                 self.cmd_link(chat_id)
                 return
             self.send_message(
                 chat_id,
-                "⛔ <b>Unauthorized</b>\nPlease enter your PIN to continue:\n<code>/start &lt;PIN&gt;</code>"
+                "⛔ <b>Unauthorized</b>\nPlease enter your PIN to continue:\n<code>/start &lt;PIN&gt;</code>",
+                with_keyboard=False
             )
             return
+
+        # Map button texts to commands
+        if clean_text == "🔗 Get Link": cmd = "/link"
+        elif clean_text == "📊 Status": cmd = "/status"
+        elif clean_text == "📈 Limits": cmd = "/limits"
+        elif clean_text == "🔄 Restart Service": cmd = "/restart"
+        elif clean_text == "🟢 Start Service": cmd = "/start_service"
+        elif clean_text == "🛑 Stop Service": cmd = "/stop"
 
         # Authorized commands
         if cmd in ["/link", "/url"]:
@@ -238,6 +274,12 @@ class TelegramBot:
             self.cmd_status(chat_id)
         elif cmd in ["/limits", "/limit", "/quota"]:
             self.cmd_limits(chat_id)
+        elif cmd in ["/restart", "/restart_service"]:
+            self.cmd_restart(chat_id)
+        elif cmd in ["/start_service", "/startserver"]:
+            self.cmd_start_service(chat_id)
+        elif cmd in ["/stop", "/stop_service"]:
+            self.cmd_stop_service(chat_id)
         elif cmd == "/pin":
             self.cmd_pin(chat_id, args)
         elif cmd in ["/cmd", "/shell"]:
@@ -249,43 +291,176 @@ class TelegramBot:
         else:
             self.send_message(
                 chat_id,
-                "❓ Unknown command. Type /help to see available commands."
+                "❓ Unknown command. Use the control buttons below or type /help."
             )
 
     def cmd_link(self, chat_id):
+        if not is_server_running():
+            self.send_message(
+                chat_id,
+                "⚠️ <b>Server is Stopped</b>\nTap <b>🟢 Start Service</b> to launch the server and generate a link."
+            )
+            return
+
         url = get_tunnel_url()
         pin = get_current_pin()
         if url:
             caption = (
-                f"🚀 <b>Antigravity Remote is Active!</b>\n\n"
+                f"🚀 <b>Antigravity Remote is Live!</b>\n\n"
                 f"🔗 <b>Link:</b> <a href=\"{url}\">{url}</a>\n"
                 f"🔑 <b>Security PIN:</b> <code>{pin}</code>\n\n"
                 f"📶 <b>Local Wi-Fi:</b> <code>http://192.168.1.11:8080</code>\n"
                 f"🔒 <b>Tailscale:</b> <code>http://100.75.138.38:8080</code>\n\n"
-                f"<i>Scan the QR code or tap the link to open in your browser!</i>"
+                f"<i>Scan QR or tap the link to connect!</i>"
             )
             self.send_photo(chat_id, QR_FILE, caption=caption)
         else:
             self.send_message(
                 chat_id,
-                f"⚠️ <b>Server Tunnel Offline</b>\nStart the server on PC or run <code>START_MOBILE_REMOTE.bat</code>."
+                f"⏳ <b>Tunnel Initializing...</b>\nPlease wait a few seconds and tap <b>🔗 Get Link</b> again."
             )
 
     def cmd_status(self, chat_id):
-        st = get_system_status()
-        disks_str = "\n".join([f"  • {d}" for d in st["disks"]])
+        running = is_server_running()
+        status_dot = "🟢 Running" if running else "🔴 Stopped"
+        pin = get_current_pin()
+        tunnel = get_tunnel_url() or "Offline"
+
+        # Hardware metrics
+        total_ram = 0
+        used_ram = 0
+        ram_pct = 0
+        try:
+            ps_cmd = "Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize, FreePhysicalMemory | ConvertTo-Json"
+            res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, timeout=5)
+            mem = json.loads(res.stdout)
+            total_mb = mem["TotalVisibleMemorySize"] // 1024
+            free_mb = mem["FreePhysicalMemory"] // 1024
+            used_mb = total_mb - free_mb
+            total_ram = round(total_mb / 1024, 1)
+            used_ram = round(used_mb / 1024, 1)
+            ram_pct = int((used_mb / total_mb) * 100)
+        except Exception:
+            pass
+
+        disks = []
+        for d in ["C:", "D:"]:
+            if os.path.exists(d):
+                try:
+                    tot, used, free = shutil.disk_usage(d)
+                    disks.append(f"  • <b>{d}</b>: {free // (2**30)}GB free / {tot // (2**30)}GB")
+                except Exception:
+                    pass
+
+        disks_str = "\n".join(disks) if disks else "  • No storage detected"
         msg = (
-            f"🖥️ <b>Workstation Status:</b>\n"
+            f"🖥️ <b>Workstation System Status:</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"💻 <b>Host:</b> <code>{st['hostname']}</code>\n"
-            f"⚡ <b>RAM:</b> <code>{st['ram']}</code>\n"
-            f"💾 <b>Disks:</b>\n{disks_str}\n"
-            f"🔗 <b>Active Tunnel:</b> <a href=\"{st['tunnel']}\">{st['tunnel']}</a>\n"
-            f"🔑 <b>PIN:</b> <code>{st['pin']}</code>\n"
-            f"🕒 <b>Time:</b> <code>{st['time']}</code>\n"
+            f"🌐 <b>Mobile Service:</b> {status_dot}\n"
+            f"💻 <b>Host:</b> <code>{socket.gethostname()}</code>\n"
+            f"⚡ <b>RAM:</b> <code>{used_ram}GB / {total_ram}GB ({ram_pct}%)</code>\n"
+            f"💾 <b>Storage:</b>\n{disks_str}\n"
+            f"🔗 <b>Active Tunnel:</b> {tunnel}\n"
+            f"🔑 <b>PIN:</b> <code>{pin}</code>\n"
             f"━━━━━━━━━━━━━━━━━━━"
         )
         self.send_message(chat_id, msg)
+
+    def cmd_limits(self, chat_id):
+        from server import get_limit_metrics
+        lim = get_limit_metrics()
+        disks_str = "\n".join([f"  • <b>{d['drive']}</b>: {d['free_gb']}GB free / {d['total_gb']}GB ({d['used_pct']}%)" for d in lim.get("disks", [])])
+        msg = (
+            f"📊 <b>Current Limit &amp; Quota Usage:</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🧠 <b>Model:</b> <code>{lim['model']}</code>\n"
+            f"📏 <b>Context Window:</b> <code>{lim['context_tokens']:,} / {lim['context_limit']:,} ({lim['context_used_pct']})</code>\n"
+            f"📥 <b>Input Tokens:</b> <code>{lim['session_input_tokens']:,}</code>\n"
+            f"📤 <b>Output Tokens:</b> <code>{lim['session_output_tokens']:,}</code>\n"
+            f"⚡ <b>Cache Read:</b> <code>{lim['session_cache_read_tokens']:,}</code>\n"
+            f"🔄 <b>Session Total:</b> <code>{lim['session_total_tokens']:,} tokens ({lim['session_steps']} steps)</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"🖥️ <b>Workstation Limits:</b>\n"
+            f"⚡ <b>RAM:</b> <code>{lim['ram']['used_gb']}GB / {lim['ram']['total_gb']}GB ({lim['ram']['pct']})</code>\n"
+            f"💾 <b>Storage:</b>\n{disks_str}\n"
+            f"━━━━━━━━━━━━━━━━━━━"
+        )
+        self.send_message(chat_id, msg)
+
+    def cmd_restart(self, chat_id):
+        if self.is_restarting:
+            self.send_message(chat_id, "⏳ Restart is already in progress, please wait...")
+            return
+
+        self.is_restarting = True
+        self.send_message(chat_id, "🔄 <b>Restarting Service...</b>\nClosing existing processes and creating a fresh Cloudflare tunnel. Please wait 5-8 seconds...")
+
+        def do_restart():
+            try:
+                # Remove old tunnel file to detect new one
+                old_url = get_tunnel_url()
+                if os.path.exists(TUNNEL_FILE):
+                    try: os.remove(TUNNEL_FILE)
+                    except Exception: pass
+
+                stop_server_service()
+                start_server_service()
+
+                # Poll for fresh tunnel URL
+                new_url = None
+                for _ in range(15):
+                    time.sleep(1)
+                    curr = get_tunnel_url()
+                    if curr and curr != old_url:
+                        new_url = curr
+                        break
+
+                pin = get_current_pin()
+                if new_url:
+                    caption = (
+                        f"✅ <b>Server Restarted Successfully!</b>\n\n"
+                        f"🔗 <b>New Link:</b> <a href=\"{new_url}\">{new_url}</a>\n"
+                        f"🔑 <b>Security PIN:</b> <code>{pin}</code>\n\n"
+                        f"<i>Tap the link above to open on mobile!</i>"
+                    )
+                    self.send_photo(chat_id, QR_FILE, caption=caption)
+                else:
+                    self.send_message(chat_id, f"⚠️ Server started on local port 8080, but tunnel is still initializing. Tap <b>🔗 Get Link</b> in a moment.")
+            finally:
+                self.is_restarting = False
+
+        threading.Thread(target=do_restart, daemon=True).start()
+
+    def cmd_start_service(self, chat_id):
+        if is_server_running():
+            url = get_tunnel_url()
+            self.send_message(chat_id, f"🟢 <b>Service is already running!</b>\nLink: {url}")
+            return
+
+        self.send_message(chat_id, "🟢 <b>Starting Antigravity Mobile Service...</b>")
+        start_server_service()
+
+        def wait_and_send():
+            for _ in range(12):
+                time.sleep(1)
+                url = get_tunnel_url()
+                if url:
+                    self.cmd_link(chat_id)
+                    return
+            self.send_message(chat_id, "🟢 Service started. Tap <b>🔗 Get Link</b> to fetch the URL.")
+
+        threading.Thread(target=wait_and_send, daemon=True).start()
+
+    def cmd_stop_service(self, chat_id):
+        if not is_server_running():
+            self.send_message(chat_id, "⚪ <b>Service is already stopped.</b>")
+            return
+
+        stop_server_service()
+        self.send_message(
+            chat_id,
+            "🛑 <b>Antigravity Mobile Server & Tunnel Stopped.</b>\nTap <b>🟢 Start Service</b> or <b>🔄 Restart Service</b> anytime to turn it back on."
+        )
 
     def cmd_pin(self, chat_id, args):
         if not args:
@@ -305,7 +480,7 @@ class TelegramBot:
 
     def cmd_shell(self, chat_id, command):
         if not command:
-            self.send_message(chat_id, "Usage: <code>/cmd &lt;powershell_command&gt;</code>\nExample: <code>/cmd dir</code>")
+            self.send_message(chat_id, "Usage: <code>/cmd &lt;powershell_command&gt;</code>\nExample: <code>/cmd git status</code>")
             return
         self.send_message(chat_id, f"⏳ Executing: <code>{command}</code>...")
         try:
@@ -334,7 +509,6 @@ class TelegramBot:
             self.send_message(chat_id, "Usage: <code>/ask &lt;instruction for Antigravity&gt;</code>")
             return
         
-        # Read active conversation id
         from server import get_latest_conversation_id
         cid = get_latest_conversation_id()
         if not cid:
@@ -348,38 +522,19 @@ class TelegramBot:
         except Exception as e:
             self.send_message(chat_id, f"❌ Error delivering message: {e}")
 
-    def cmd_limits(self, chat_id):
-        from server import get_limit_metrics
-        lim = get_limit_metrics()
-        disks_str = "\n".join([f"  • <b>{d['drive']}</b>: {d['free_gb']}GB free / {d['total_gb']}GB ({d['used_pct']}%)" for d in lim.get("disks", [])])
-        msg = (
-            f"📊 <b>Current Limit &amp; Quota Usage:</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🧠 <b>Model:</b> <code>{lim['model']}</code>\n"
-            f"📏 <b>Context Window:</b> <code>{lim['context_tokens']:,} / {lim['context_limit']:,} ({lim['context_used_pct']})</code>\n"
-            f"📥 <b>Input Tokens:</b> <code>{lim['session_input_tokens']:,}</code>\n"
-            f"📤 <b>Output Tokens:</b> <code>{lim['session_output_tokens']:,}</code>\n"
-            f"⚡ <b>Cache Read:</b> <code>{lim['session_cache_read_tokens']:,}</code>\n"
-            f"🔄 <b>Session Total:</b> <code>{lim['session_total_tokens']:,} tokens ({lim['session_steps']} steps)</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━\n"
-            f"🖥️ <b>Workstation Limits:</b>\n"
-            f"⚡ <b>RAM:</b> <code>{lim['ram']['used_gb']}GB / {lim['ram']['total_gb']}GB ({lim['ram']['pct']})</code>\n"
-            f"💾 <b>Storage:</b>\n{disks_str}\n"
-            f"━━━━━━━━━━━━━━━━━━━"
-        )
-        self.send_message(chat_id, msg)
-
     def cmd_help(self, chat_id):
         msg = (
             f"🤖 <b>Antigravity Telegram Controller</b>\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
             f"🔗 <b>/link</b> - Get active Cloudflare link &amp; QR code\n"
             f"📊 <b>/status</b> - Get PC CPU, RAM, and Disk metrics\n"
-            f"📈 <b>/limits</b> - View AI context window, token quotas &amp; limits\n"
+            f"📈 <b>/limits</b> - View AI context window &amp; token quotas\n"
+            f"🔄 <b>/restart</b> - Stop &amp; restart server with fresh tunnel\n"
+            f"🟢 <b>/start_service</b> - Start mobile server if stopped\n"
+            f"🛑 <b>/stop</b> - Stop mobile server &amp; tunnel\n"
             f"🔑 <b>/pin [new_pin]</b> - View or update security PIN\n"
             f"💻 <b>/cmd &lt;command&gt;</b> - Run PowerShell on workstation\n"
             f"🤖 <b>/ask &lt;prompt&gt;</b> - Command Antigravity coding agent\n"
-            f"❓ <b>/help</b> - Show this help menu\n"
             f"━━━━━━━━━━━━━━━━━━━"
         )
         self.send_message(chat_id, msg)
@@ -389,7 +544,7 @@ class TelegramBot:
         while self.running:
             time.sleep(3)
             current_url = get_tunnel_url()
-            if current_url and current_url != last_url:
+            if current_url and current_url != last_url and not self.is_restarting:
                 last_url = current_url
                 pin = get_current_pin()
                 msg = (
@@ -408,10 +563,9 @@ class TelegramBot:
 
         bot_name = me["result"].get("username", "AntigravityBot")
         print("=" * 60)
-        print(f"  🤖 TELEGRAM BOT RUNNING: @{bot_name}")
+        print(f"  🤖 TELEGRAM SUPERVISOR BOT RUNNING: @{bot_name}")
         print("=" * 60)
-        print(f"  👉 Open Telegram and search for: @{bot_name}")
-        print(f"  👉 Send: /start {get_current_pin()} to authorize your chat!")
+        print(f"  👉 Open Telegram and tap buttons to control your server!")
         print("=" * 60)
 
         # Start background tunnel change watcher
@@ -440,28 +594,8 @@ def main():
     cfg = load_config()
     token = cfg.get("bot_token")
     if not token or token == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
-        print("=" * 60)
-        print("  🤖 ANTIGRAVITY TELEGRAM BOT SETUP")
-        print("=" * 60)
-        print("  1. Open Telegram and search for: @BotFather")
-        print("  2. Send '/newbot' and follow prompts to get your Bot Token.")
-        print(f"  3. Paste the token into: {CONFIG_FILE}")
-        print("     or set environment variable TELEGRAM_BOT_TOKEN")
-        print("=" * 60)
-        
-        # Check if user wants to input it now
-        if sys.stdin.isatty():
-            try:
-                entered = input("  Enter your Bot Token (or press Enter to skip): ").strip()
-                if entered:
-                    cfg["bot_token"] = entered
-                    save_config(cfg)
-                    token = entered
-            except Exception:
-                pass
-        
-        if not token or token == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
-            return
+        print("Please configure bot_token in telegram_config.json")
+        return
 
     bot = TelegramBot(token)
     bot.start()
