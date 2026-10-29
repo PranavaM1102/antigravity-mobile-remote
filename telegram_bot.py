@@ -42,7 +42,7 @@ def escape_html(text):
 DEFAULT_KEYBOARD = {
     "keyboard": [
         [{"text": "🔗 Get Link"}, {"text": "📊 Status"}, {"text": "📈 Limits"}],
-        [{"text": "🔄 Restart Service"}, {"text": "🟢 Start Service"}, {"text": "🛑 Stop Service"}]
+        [{"text": "📁 Files"}, {"text": "🔄 Restart Service"}, {"text": "🛑 Stop Service"}]
     ],
     "resize_keyboard": True,
     "is_persistent": True
@@ -296,6 +296,7 @@ class TelegramBot:
         if clean_text == "🔗 Get Link": cmd = "/link"
         elif clean_text == "📊 Status": cmd = "/status"
         elif clean_text == "📈 Limits": cmd = "/limits"
+        elif clean_text == "📁 Files": cmd = "/files"
         elif clean_text == "🔄 Restart Service": cmd = "/restart"
         elif clean_text == "🟢 Start Service": cmd = "/start_service"
         elif clean_text == "🛑 Stop Service": cmd = "/stop"
@@ -307,6 +308,8 @@ class TelegramBot:
             self.cmd_status(chat_id)
         elif cmd in ["/limits", "/limit", "/quota"]:
             self.cmd_limits(chat_id)
+        elif cmd in ["/files", "/file", "/generated", "/docs"]:
+            self.cmd_files(chat_id)
         elif cmd in ["/restart", "/restart_service"]:
             self.cmd_restart(chat_id)
         elif cmd in ["/start_service", "/startserver"]:
@@ -430,6 +433,52 @@ class TelegramBot:
             f"━━━━━━━━━━━━━━━━━━━"
         )
         self.send_message(chat_id, msg)
+
+
+    def cmd_files(self, chat_id):
+        try:
+            from server import list_generated_files, get_active_conversation_id
+            active_cid = get_active_conversation_id()
+            files = list_generated_files(active_cid)
+        except Exception as e:
+            self.send_message(chat_id, f"❌ Error fetching files: {e}")
+            return
+
+        if not files:
+            self.send_message(
+                chat_id,
+                "📁 <b>No Generated Files Found Yet</b>\n\nGenerated artifacts and workspace documents will appear here once Antigravity creates them."
+            )
+            return
+
+        tunnel = get_tunnel_url()
+        lines = [
+            f"📁 <b>Generated Files & Documents ({len(files)} total):</b>\n",
+            "━━━━━━━━━━━━━━━━━━━"
+        ]
+
+        # Top 8 most recent files
+        for f in files[:8]:
+            icon = f.get("icon", "📄")
+            name = escape_html(f.get("name", "file"))
+            cat = escape_html(f.get("category", "Artifact"))
+            size = f.get("size_str", "")
+            raw_path = f.get("path", "")
+            
+            if tunnel:
+                file_url = f"{tunnel}/view_file?path={urllib.parse.quote(raw_path)}"
+                lines.append(f"{icon} <a href=\"{file_url}\"><b>{name}</b></a>")
+                lines.append(f"   <i>{cat} • {size}</i>")
+            else:
+                lines.append(f"{icon} <b>{name}</b> (<code>{cat} • {size}</code>)")
+
+        lines.append("━━━━━━━━━━━━━━━━━━━")
+        if tunnel:
+            lines.append(f"🌐 <b>Browse All:</b> <a href=\"{tunnel}\">Open Remote Web App</a>")
+        else:
+            lines.append("<i>Start service to view or download files online.</i>")
+
+        self.send_message(chat_id, "\n".join(lines))
 
     def cmd_restart(self, chat_id):
         if self.is_restarting:
@@ -896,6 +945,7 @@ class TelegramBot:
             f"🔗 <b>/link</b> - Get active Cloudflare link &amp; QR code\n"
             f"📊 <b>/status</b> - Get PC CPU, RAM, and Disk metrics\n"
             f"📈 <b>/limits</b> - View AI context window &amp; token quotas\n"
+            f"📁 <b>/files</b> - Browse generated artifacts &amp; documents\n"
             f"🔄 <b>/restart</b> - Stop &amp; restart server with fresh tunnel\n"
             f"🟢 <b>/start_service</b> - Start mobile server if stopped\n"
             f"🛑 <b>/stop</b> - Stop mobile server &amp; tunnel\n"

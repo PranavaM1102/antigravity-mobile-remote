@@ -68,6 +68,7 @@
   <!-- Tab Bar -->
   <nav class="tab-bar">
     <button class="tab-btn active" data-tab="chat">💬 Agent Chat</button>
+    <button class="tab-btn" data-tab="files">📁 Files</button>
     <button class="tab-btn" data-tab="htmlview">🌐 HTML View</button>
     <button class="tab-btn" data-tab="terminal">💻 Shell</button>
     <button class="tab-btn" data-tab="info">📱 Connect & QR</button>
@@ -100,6 +101,31 @@
           <textarea id="promptInput" rows="1" placeholder="Command Antigravity..."></textarea>
         </div>
         <button class="action-btn send-btn" id="sendBtn" title="Send Command">🚀</button>
+      </div>
+    </section>
+
+    <!-- TAB: Generated Files Explorer -->
+    <section class="tab-pane" id="filesPane">
+      <div class="files-header-bar">
+        <div class="files-search-wrap">
+          <input type="text" id="filesSearchInput" placeholder="🔍 Search generated files..." autocomplete="off">
+        </div>
+        <button class="files-refresh-btn" id="filesRefreshBtn" title="Refresh File List">🔄</button>
+      </div>
+
+      <!-- Category Filter Pills -->
+      <div class="files-filter-pills" id="filesFilterPills">
+        <button class="filter-pill active" data-filter="all">All Files</button>
+        <button class="filter-pill" data-filter="markdown">📝 Docs & MD</button>
+        <button class="filter-pill" data-filter="html">🌐 HTML Web</button>
+        <button class="filter-pill" data-filter="pdf">📕 PDF</button>
+        <button class="filter-pill" data-filter="image">🖼️ Images</button>
+        <button class="filter-pill" data-filter="code">💻 Code</button>
+      </div>
+
+      <!-- Files List Container -->
+      <div class="files-container" id="filesContainer">
+        <div class="files-loading">Loading generated files...</div>
       </div>
     </section>
 
@@ -181,6 +207,29 @@ Type any command below to execute directly on the PC.
       </div>
     </section>
   </main>
+
+  <!-- Fullscreen Interactive File Viewer Modal -->
+  <div id="fileViewerModal" class="file-viewer-modal hidden">
+    <div class="file-viewer-dialog">
+      <div class="file-viewer-header">
+        <div class="file-viewer-title-wrap">
+          <span id="fileViewerIcon" class="file-viewer-icon">📄</span>
+          <span id="fileViewerTitle" class="file-viewer-title">File Name</span>
+          <span id="fileViewerMeta" class="file-viewer-meta"></span>
+        </div>
+        <div class="file-viewer-actions">
+          <button id="fileViewerCopyBtn" class="modal-tool-btn" title="Copy Content">📋</button>
+          <button id="fileViewerNewTabBtn" class="modal-tool-btn" title="Open / Download in New Tab">↗️</button>
+          <button id="fileViewerCloseBtn" class="modal-close-btn" title="Close Viewer">✕</button>
+        </div>
+      </div>
+
+      <!-- Viewer Content Area -->
+      <div class="file-viewer-body" id="fileViewerBody">
+        <div class="file-viewer-loading">Loading file content...</div>
+      </div>
+    </div>
+  </div>
 
   <script src="/web/marked.min.js"></script>
   <script src="/web/app.js"></script>

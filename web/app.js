@@ -155,6 +155,7 @@ tabBtns.forEach(btn => {
     if (target === "chat") scrollToBottom();
     if (target === "info") fetchLimits();
     if (target === "htmlview") loadHtmlView();
+    if (target === "files") loadGeneratedFiles();
   });
 });
 
@@ -169,6 +170,23 @@ chatContainer.addEventListener("scroll", () => {
   const threshold = 60;
   const isNearBottom = chatContainer.scrollHeight - chatContainer.scrollTop - chatContainer.clientHeight < threshold;
   autoScroll = isNearBottom;
+});
+
+// Intercept file links clicked in chat
+chatContainer.addEventListener("click", (e) => {
+  const link = e.target.closest("a");
+  if (link && link.href) {
+    const href = link.getAttribute("href") || "";
+    if (href.startsWith("file:///") || href.includes("/view_file?path=") || href.includes("brain") || href.endsWith(".md") || href.endsWith(".html") || href.endsWith(".pdf")) {
+      e.preventDefault();
+      e.stopPropagation();
+      let cleanPath = href.replace(/^file:\/\/\//i, "");
+      if (href.includes("/view_file?path=")) {
+        cleanPath = decodeURIComponent(href.split("/view_file?path=")[1].split("&")[0]);
+      }
+      openFileViewerByPath(cleanPath);
+    }
+  }
 });
 
 function scrollToBottom() {
@@ -486,19 +504,28 @@ function buildMessageElement(step) {
     if (step.tool_calls && step.tool_calls.length > 0) {
       step.tool_calls.forEach(tc => {
         let argSummary = "";
+        let filePath = "";
         try {
           if (tc.args) {
             argSummary = tc.args.toolSummary || tc.args.CommandLine || tc.args.Path || JSON.stringify(tc.args).substring(0, 40);
+            if (tc.args.Path) filePath = tc.args.Path;
           }
         } catch(e) {}
 
         const resultText = tc.result || "Executing command...";
+        let fileBtnHtml = "";
+        if (filePath && (tc.name === "write_file" || tc.name === "edit_file" || tc.name === "read_file")) {
+          const fname = filePath.replace(/\\/g, '/').split('/').pop();
+          fileBtnHtml = `<div style="padding: 2px 10px 6px 10px;"><button class="inline-file-pill" onclick="event.stopPropagation(); openFileViewerByPath('${escapeHtml(filePath)}')">📄 View: ${escapeHtml(fname)}</button></div>`;
+        }
+
         html += `
           <div class="tool-pill" onclick="this.classList.toggle('expanded')">
             <div class="tool-header">
               <div class="tool-name">⚡ ${escapeHtml(tc.name)} <span style="color:var(--text-muted); font-size:10px;">${escapeHtml(argSummary)}</span></div>
               <span class="tool-badge ${tc.status}">${tc.status}</span>
             </div>
+            ${fileBtnHtml}
             <pre class="tool-body">${escapeHtml(resultText)}</pre>
           </div>
         `;
@@ -956,5 +983,281 @@ if (htmlNewTabBtn) {
     } else {
       window.open("/preview_file?path=" + encodeURIComponent(currentVal), "_blank");
     }
+  });
+}
+
+
+// ==========================================================
+// Generated Files Explorer & Interactive In-App Viewer
+// ==========================================================
+let cachedGeneratedFiles = [];
+let currentFileFilter = "all";
+let currentViewingFile = null;
+
+const filesSearchInput = document.getElementById("filesSearchInput");
+const filesFilterPills = document.getElementById("filesFilterPills");
+const filesContainer = document.getElementById("filesContainer");
+const filesCountLabel = document.getElementById("filesCountLabel");
+const fileViewerModal = document.getElementById("fileViewerModal");
+const fileViewerIcon = document.getElementById("fileViewerIcon");
+const fileViewerTitle = document.getElementById("fileViewerTitle");
+const fileViewerMeta = document.getElementById("fileViewerMeta");
+const fileViewerCopyBtn = document.getElementById("fileViewerCopyBtn");
+const fileViewerNewTabBtn = document.getElementById("fileViewerNewTabBtn");
+const fileViewerCloseBtn = document.getElementById("fileViewerCloseBtn");
+const fileViewerBody = document.getElementById("fileViewerBody");
+
+async function loadGeneratedFiles() {
+  if (!filesContainer) return;
+  filesContainer.innerHTML = '<div class="files-loading">🔄 Scanning generated artifacts and workspace files...</div>';
+  try {
+    const res = await authFetch(`/api/files?cid=${encodeURIComponent(activeConversationId || "")}`);
+    const data = await res.json();
+    cachedGeneratedFiles = data.files || [];
+    renderGeneratedFiles();
+  } catch (err) {
+    if (err.message !== "Authentication required") {
+      filesContainer.innerHTML = `<div class="files-empty">❌ Failed to load files: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+}
+
+function renderGeneratedFiles() {
+  if (!filesContainer) return;
+  const query = filesSearchInput ? filesSearchInput.value.toLowerCase().trim() : "";
+  
+  const filtered = cachedGeneratedFiles.filter(f => {
+    if (currentFileFilter !== "all" && f.type !== currentFileFilter) {
+      return false;
+    }
+    if (query) {
+      const matchName = (f.name || "").toLowerCase().includes(query);
+      const matchPath = (f.path || "").toLowerCase().includes(query);
+      const matchCat = (f.category || "").toLowerCase().includes(query);
+      if (!matchName && !matchPath && !matchCat) return false;
+    }
+    return true;
+  });
+
+  if (filesCountLabel) {
+    filesCountLabel.textContent = `${filtered.length} of ${cachedGeneratedFiles.length} files`;
+  }
+
+  if (filtered.length === 0) {
+    filesContainer.innerHTML = `
+      <div class="files-empty">
+        <div style="font-size: 32px; margin-bottom: 8px;">🔍</div>
+        <div>No matching files found</div>
+        <div style="font-size: 11px; margin-top: 4px; color: var(--text-muted);">Try a different search term or category filter.</div>
+      </div>
+    `;
+    return;
+  }
+
+  filesContainer.innerHTML = filtered.map((f, idx) => {
+    const badgeClass = (f.category || "").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    return `
+      <div class="file-card" onclick="openFileViewerByObj(${idx})">
+        <div class="file-card-icon">${f.icon || "📄"}</div>
+        <div class="file-card-details">
+          <div class="file-card-name" title="${escapeHtml(f.path)}">${escapeHtml(f.name)}</div>
+          <div class="file-card-sub">
+            <span class="file-card-badge ${escapeHtml(badgeClass)}">${escapeHtml(f.category)}</span>
+            <span>${escapeHtml(f.size_str || "")}</span>
+            <span>•</span>
+            <span>${escapeHtml(f.time_str || "")}</span>
+          </div>
+        </div>
+        <div class="file-card-actions">
+          <button class="file-card-btn primary" onclick="event.stopPropagation(); openFileInNewTab('${escapeHtml(f.path)}')">↗️</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function openFileViewerByObj(index) {
+  const query = filesSearchInput ? filesSearchInput.value.toLowerCase().trim() : "";
+  const filtered = cachedGeneratedFiles.filter(f => {
+    if (currentFileFilter !== "all" && f.type !== currentFileFilter) return false;
+    if (query) {
+      const matchName = (f.name || "").toLowerCase().includes(query);
+      const matchPath = (f.path || "").toLowerCase().includes(query);
+      const matchCat = (f.category || "").toLowerCase().includes(query);
+      if (!matchName && !matchPath && !matchCat) return false;
+    }
+    return true;
+  });
+  const file = filtered[index];
+  if (file) openFileViewer(file);
+}
+
+function openFileInNewTab(filePath) {
+  window.open(`/view_file?path=${encodeURIComponent(filePath)}`, "_blank");
+}
+
+async function openFileViewerByPath(filePath) {
+  if (!filePath) return;
+  const cleanPath = filePath.replace(/^file:\/\/\//i, "").replace(/\\/g, "/");
+  const found = cachedGeneratedFiles.find(f => f.path.replace(/\\/g, "/") === cleanPath || f.path.endsWith(cleanPath));
+  if (found) {
+    openFileViewer(found);
+  } else {
+    const fname = cleanPath.split("/").pop();
+    const ext = "." + (fname.split(".").pop() || "").toLowerCase();
+    let type = "other";
+    let icon = "📄";
+    if (ext === ".md") { type = "markdown"; icon = "📝"; }
+    else if (ext === ".html" || ext === ".htm") { type = "html"; icon = "🌐"; }
+    else if (ext === ".pdf") { type = "pdf"; icon = "📕"; }
+    else if ([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"].includes(ext)) { type = "image"; icon = "🖼️"; }
+    else if ([".py", ".js", ".ts", ".css", ".json", ".ps1", ".bat", ".sh"].includes(ext)) { type = "code"; icon = "💻"; }
+    
+    openFileViewer({
+      name: fname,
+      path: filePath,
+      category: "Generated File",
+      type: type,
+      icon: icon,
+      size_str: "",
+      time_str: ""
+    });
+  }
+}
+
+async function openFileViewer(file) {
+  currentViewingFile = file;
+  if (!fileViewerModal) return;
+
+  fileViewerIcon.textContent = file.icon || "📄";
+  fileViewerTitle.textContent = file.name || "File Preview";
+  fileViewerMeta.textContent = `${file.category || ""} ${file.size_str ? "• " + file.size_str : ""}`;
+  fileViewerModal.classList.remove("hidden");
+  fileViewerBody.innerHTML = '<div class="file-viewer-loading">⏳ Loading file content...</div>';
+
+  if (fileViewerNewTabBtn) {
+    fileViewerNewTabBtn.onclick = () => openFileInNewTab(file.path);
+  }
+
+  const encodedPath = encodeURIComponent(file.path);
+
+  try {
+    if (file.type === "markdown") {
+      const res = await authFetch(`/api/raw_file?path=${encodedPath}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const rawText = data.content !== undefined ? data.content : "";
+      
+      const parsedHtml = (typeof marked !== "undefined") ? marked.parse(rawText) : `<pre>${escapeHtml(rawText)}</pre>`;
+      fileViewerBody.innerHTML = `<div class="file-viewer-markdown">${parsedHtml}</div>`;
+      
+      if (fileViewerCopyBtn) {
+        fileViewerCopyBtn.style.display = "block";
+        fileViewerCopyBtn.onclick = () => copyTextToClipboard(rawText, fileViewerCopyBtn);
+      }
+    } else if (file.type === "code") {
+      const res = await authFetch(`/api/raw_file?path=${encodedPath}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const rawText = data.content !== undefined ? data.content : "";
+      
+      fileViewerBody.innerHTML = `<pre class="file-viewer-code"><code>${escapeHtml(rawText)}</code></pre>`;
+      
+      if (fileViewerCopyBtn) {
+        fileViewerCopyBtn.style.display = "block";
+        fileViewerCopyBtn.onclick = () => copyTextToClipboard(rawText, fileViewerCopyBtn);
+      }
+    } else if (file.type === "html") {
+      if (fileViewerCopyBtn) fileViewerCopyBtn.style.display = "none";
+      fileViewerBody.innerHTML = `<iframe src="/view_file?path=${encodedPath}" sandbox="allow-scripts allow-same-origin allow-forms allow-modals" title="${escapeHtml(file.name)}"></iframe>`;
+    } else if (file.type === "pdf") {
+      if (fileViewerCopyBtn) fileViewerCopyBtn.style.display = "none";
+      fileViewerBody.innerHTML = `
+        <div class="file-viewer-pdf-container">
+          <div style="font-size: 36px;">📕</div>
+          <div style="font-weight: 600; font-size: 15px; color: #fff;">${escapeHtml(file.name)}</div>
+          <button class="file-viewer-pdf-btn" onclick="openFileInNewTab('${escapeHtml(file.path)}')">↗️ Open PDF in Fullscreen / Download</button>
+          <iframe src="/view_file?path=${encodedPath}" style="width: 100%; height: 65vh; border: none; border-radius: 8px; margin-top: 10px;"></iframe>
+        </div>
+      `;
+    } else if (file.type === "image") {
+      if (fileViewerCopyBtn) fileViewerCopyBtn.style.display = "none";
+      fileViewerBody.innerHTML = `<img src="/view_file?path=${encodedPath}" alt="${escapeHtml(file.name)}">`;
+    } else {
+      try {
+        const res = await authFetch(`/api/raw_file?path=${encodedPath}`);
+        if (res.ok) {
+          const data = await res.json();
+          const rawText = data.content !== undefined ? data.content : "";
+          fileViewerBody.innerHTML = `<pre class="file-viewer-code"><code>${escapeHtml(rawText)}</code></pre>`;
+          if (fileViewerCopyBtn) {
+            fileViewerCopyBtn.style.display = "block";
+            fileViewerCopyBtn.onclick = () => copyTextToClipboard(rawText, fileViewerCopyBtn);
+          }
+          return;
+        }
+      } catch(e) {}
+      
+      if (fileViewerCopyBtn) fileViewerCopyBtn.style.display = "none";
+      fileViewerBody.innerHTML = `
+        <div class="file-viewer-pdf-container">
+          <div style="font-size: 36px;">${file.icon || "📄"}</div>
+          <div style="font-weight: 600; color: #fff;">${escapeHtml(file.name)}</div>
+          <button class="file-viewer-pdf-btn" onclick="openFileInNewTab('${escapeHtml(file.path)}')">↗️ Open / Download File</button>
+        </div>
+      `;
+    }
+  } catch (err) {
+    fileViewerBody.innerHTML = `
+      <div class="file-viewer-pdf-container">
+        <div style="font-size: 32px;">⚠️</div>
+        <div style="color: var(--accent-red); font-size: 13px;">Failed to preview file: ${escapeHtml(err.message)}</div>
+        <button class="file-viewer-pdf-btn" onclick="openFileInNewTab('${escapeHtml(file.path)}')">↗️ Try Opening in New Tab</button>
+      </div>
+    `;
+  }
+}
+
+function closeFileViewer() {
+  if (fileViewerModal) {
+    fileViewerModal.classList.add("hidden");
+    fileViewerBody.innerHTML = "";
+  }
+  currentViewingFile = null;
+}
+
+if (fileViewerCloseBtn) {
+  fileViewerCloseBtn.addEventListener("click", closeFileViewer);
+}
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && fileViewerModal && !fileViewerModal.classList.contains("hidden")) {
+    closeFileViewer();
+  }
+});
+
+if (fileViewerModal) {
+  fileViewerModal.addEventListener("click", (e) => {
+    if (e.target === fileViewerModal) {
+      closeFileViewer();
+    }
+  });
+}
+
+if (filesFilterPills) {
+  const pills = filesFilterPills.querySelectorAll(".filter-pill");
+  pills.forEach(pill => {
+    pill.addEventListener("click", () => {
+      pills.forEach(p => p.classList.remove("active"));
+      pill.classList.add("active");
+      currentFileFilter = pill.getAttribute("data-filter") || "all";
+      renderGeneratedFiles();
+    });
+  });
+}
+
+if (filesSearchInput) {
+  filesSearchInput.addEventListener("input", () => {
+    renderGeneratedFiles();
   });
 }

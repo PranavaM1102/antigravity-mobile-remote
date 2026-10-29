@@ -12,11 +12,16 @@
 
 ## ✨ Features
 
-- 🤖 **Telegram Bot Integration (with Direct Output)**:
+- 📁 **Generated Files Explorer & Interactive In-App Viewer**:
+  - Dedicated **Files** tab discovering artifacts across active and past Antigravity sessions (`brain/`), workspace documents (`.md`, `.html`, `.pdf`, `.png`, `.py`, etc.), and mobile uploads.
+  - Interactive search bar and category filters (All, 📝 Docs & MD, 🌐 HTML Web, 📕 PDF, 🖼️ Images, 💻 Code).
+  - Built-in full-screen modal viewer: renders markdown with copy support, displays inline HTML iframes, previews and downloads PDFs, and views images.
+  - In-chat clickable file pills: any `write_file`, `edit_file`, or file link mentioned by Antigravity in chat can be tapped to open the file directly on mobile!
+- 🤖 **Telegram Bot Integration (with Direct Output & File Access)**:
   - When asked via `/ask` or photo message, streams tool execution status and **delivers Antigravity's final answer directly into Telegram**!
   - Interactive session selector: choose current session, past sessions, or start a new task.
   - Receive instant push notifications with new links & QR codes whenever the PC reboots or server restarts.
-  - Commands: `/link`, `/status`, `/limits`, `/restart`, `/start_service`, `/stop`, `/pin`, `/ask`, `/cmd`.
+  - Commands: `/link`, `/status`, `/limits`, `/restart`, `/start_service`, `/stop`, `/files`, `/pin`, `/ask`, `/cmd`.
 - 📷 **Direct Camera & Photo Input**:
   - One-tap mobile camera capture (`capture="environment"`) to snap and attach photos directly from your phone.
   - Instant image thumbnail preview before sending.

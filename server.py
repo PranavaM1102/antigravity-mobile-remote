@@ -556,6 +556,179 @@ def get_limit_metrics():
         "disks": disks
     }
 
+
+def format_file_size(size_bytes):
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+def get_file_type_meta(fname):
+    ext = os.path.splitext(fname)[1].lower()
+    if ext in [".html", ".htm"]: return "html", "🌐"
+    if ext in [".md", ".markdown"]: return "markdown", "📝"
+    if ext in [".pdf"]: return "pdf", "📕"
+    if ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]: return "image", "🖼️"
+    if ext in [".py", ".js", ".css", ".json", ".sh", ".bat", ".ps1", ".ts"]: return "code", "💻"
+    return "text", "📄"
+
+def list_generated_files(active_cid=None):
+    files = []
+    seen = set()
+
+    # 1. Brain session artifacts (Highest Priority)
+    if os.path.exists(BRAIN_DIR):
+        cids = [active_cid] if active_cid else []
+        for d in sorted(os.listdir(BRAIN_DIR), key=lambda x: os.path.getmtime(os.path.join(BRAIN_DIR, x)), reverse=True):
+            if d not in cids and os.path.isdir(os.path.join(BRAIN_DIR, d)):
+                cids.append(d)
+
+        for c in cids[:8]:
+            cdir = os.path.join(BRAIN_DIR, c)
+            if not os.path.isdir(cdir): continue
+            for root, dirs, fnames in os.walk(cdir):
+                dirs[:] = [d for d in dirs if d not in [".system_generated", "leveldb"]]
+                for fn in fnames:
+                    if fn.endswith((".db", ".log", ".pb", ".lock", ".jsonl", ".metadata.json", ".resolved")):
+                        continue
+                    full = os.path.join(root, fn)
+                    if full in seen: continue
+                    seen.add(full)
+                    ftype, icon = get_file_type_meta(fn)
+                    is_active = (c == active_cid)
+                    rel = os.path.relpath(full, BRAIN_DIR).replace("\\", "/")
+                    fsize = os.path.getsize(full)
+                    fmtime = os.path.getmtime(full)
+                    files.append({
+                        "name": fn,
+                        "path": f"brain/{rel}",
+                        "category": "Active Session" if is_active else "Session Artifact",
+                        "type": ftype,
+                        "icon": icon,
+                        "size": fsize,
+                        "size_str": format_file_size(fsize),
+                        "mtime": fmtime,
+                        "time_str": time.strftime("%m/%d %H:%M", time.localtime(fmtime)),
+                        "cid": c
+                    })
+
+    # 2. Uploads
+    if os.path.exists(UPLOADS_DIR):
+        for fn in os.listdir(UPLOADS_DIR):
+            if fn.endswith(".gitkeep"): continue
+            full = os.path.join(UPLOADS_DIR, fn)
+            if os.path.isfile(full) and full not in seen:
+                seen.add(full)
+                ftype, icon = get_file_type_meta(fn)
+                fsize = os.path.getsize(full)
+                fmtime = os.path.getmtime(full)
+                files.append({
+                    "name": fn,
+                    "path": f"uploads/{fn}",
+                    "category": "Mobile Upload",
+                    "type": ftype,
+                    "icon": icon,
+                    "size": fsize,
+                    "size_str": format_file_size(fsize),
+                    "mtime": fmtime,
+                    "time_str": time.strftime("%m/%d %H:%M", time.localtime(fmtime)),
+                    "cid": ""
+                })
+
+    # 3. Workspace documents & outputs
+    if os.path.exists(WORKSPACE_DIR):
+        for root, dirs, fnames in os.walk(WORKSPACE_DIR):
+            dirs[:] = [d for d in dirs if d not in [".git", "node_modules", ".venv", "__pycache__", "web", "uploads", "build", ".gradle"] and not d.startswith(".")]
+            depth = root[len(WORKSPACE_DIR):].count(os.sep)
+            if depth > 2:
+                dirs[:] = []
+                continue
+            for fn in fnames:
+                ext = os.path.splitext(fn)[1].lower()
+                if ext in [".pdf", ".html", ".htm", ".md", ".png", ".jpg", ".txt", ".json", ".py"]:
+                    full = os.path.join(root, fn)
+                    if full in seen: continue
+                    seen.add(full)
+                    ftype, icon = get_file_type_meta(fn)
+                    rel = os.path.relpath(full, WORKSPACE_DIR).replace("\\", "/")
+                    fsize = os.path.getsize(full)
+                    fmtime = os.path.getmtime(full)
+                    files.append({
+                        "name": fn,
+                        "path": f"workspace/{rel}",
+                        "category": "Workspace Document",
+                        "type": ftype,
+                        "icon": icon,
+                        "size": fsize,
+                        "size_str": format_file_size(fsize),
+                        "mtime": fmtime,
+                        "time_str": time.strftime("%m/%d %H:%M", time.localtime(fmtime)),
+                        "cid": ""
+                    })
+
+    files.sort(key=lambda x: x["mtime"], reverse=True)
+    return files
+
+def resolve_safe_filepath(rel_path):
+    if not rel_path: return None
+    if rel_path.startswith("file:///"): rel_path = rel_path[8:]
+    elif rel_path.startswith("file://"): rel_path = rel_path[7:]
+    if "?" in rel_path: rel_path = rel_path.split("?")[0]
+    rel_path = urllib.parse.unquote(rel_path)
+
+    target_path = None
+    if rel_path.startswith("brain/"):
+        target_path = os.path.abspath(os.path.join(BRAIN_DIR, rel_path[6:]))
+    elif rel_path.startswith("uploads/"):
+        target_path = os.path.abspath(os.path.join(UPLOADS_DIR, rel_path[8:]))
+    elif rel_path.startswith("workspace/"):
+        target_path = os.path.abspath(os.path.join(WORKSPACE_DIR, rel_path[10:]))
+    else:
+        if os.path.isabs(rel_path):
+            target_path = os.path.abspath(rel_path)
+        else:
+            w_candidate = os.path.abspath(os.path.join(WORKSPACE_DIR, rel_path))
+            b_candidate = os.path.abspath(os.path.join(BRAIN_DIR, rel_path))
+            target_path = w_candidate if os.path.isfile(w_candidate) else b_candidate
+
+    allowed_bases = [os.path.abspath(BRAIN_DIR), os.path.abspath(WORKSPACE_DIR), os.path.abspath(UPLOADS_DIR)]
+    is_safe = False
+    for base in allowed_bases:
+        try:
+            if os.path.commonpath([target_path, base]) == base:
+                is_safe = True
+                break
+        except Exception:
+            pass
+
+    return target_path if is_safe and os.path.isfile(target_path) else None
+
+def get_file_mime_type(target_path):
+    ext = os.path.splitext(target_path)[1].lower()
+    return {
+        ".html": "text/html; charset=utf-8",
+        ".htm": "text/html; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+        ".markdown": "text/markdown; charset=utf-8",
+        ".pdf": "application/pdf",
+        ".css": "text/css; charset=utf-8",
+        ".js": "application/javascript; charset=utf-8",
+        ".json": "application/json; charset=utf-8",
+        ".py": "text/plain; charset=utf-8",
+        ".txt": "text/plain; charset=utf-8",
+        ".sh": "text/plain; charset=utf-8",
+        ".bat": "text/plain; charset=utf-8",
+        ".ps1": "text/plain; charset=utf-8",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+        ".svg": "image/svg+xml"
+    }.get(ext, "application/octet-stream")
+
 class RemoteHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         pass
@@ -633,34 +806,31 @@ class RemoteHandler(BaseHTTPRequestHandler):
             else:
                 self.send_error(404, "Upload Not Found")
 
-        elif path == "/preview_file":
+        elif path in ["/preview_file", "/view_file"]:
             rel_path = query.get("path", [""])[0]
             if not rel_path:
                 self.send_error(400, "Missing path parameter")
                 return
-            target_path = os.path.abspath(os.path.join(WORKSPACE_DIR, rel_path))
-            try:
-                common = os.path.commonpath([target_path, os.path.abspath(WORKSPACE_DIR)])
-                if common != os.path.abspath(WORKSPACE_DIR) or not os.path.isfile(target_path):
-                    self.send_error(404, "File Not Found or Access Denied")
-                    return
-            except Exception:
-                self.send_error(403, "Forbidden")
+            target_path = resolve_safe_filepath(rel_path)
+            if not target_path or not os.path.isfile(target_path):
+                self.send_error(404, "File Not Found or Access Denied")
                 return
 
-            ext = os.path.splitext(target_path)[1].lower()
-            ctype = {
-                ".html": "text/html; charset=utf-8",
-                ".htm": "text/html; charset=utf-8",
-                ".css": "text/css; charset=utf-8",
-                ".js": "application/javascript; charset=utf-8",
-                ".json": "application/json; charset=utf-8",
-                ".png": "image/png",
-                ".jpg": "image/jpeg",
-                ".jpeg": "image/jpeg",
-                ".svg": "image/svg+xml"
-            }.get(ext, "text/plain; charset=utf-8")
-            self.serve_file(target_path, ctype)
+            ctype = get_file_mime_type(target_path)
+            # Add inline header so PDFs and images display directly in browser
+            fname = os.path.basename(target_path)
+            try:
+                with open(target_path, "rb") as f:
+                    content = f.read()
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(content)))
+                self.send_header("Content-Disposition", f'inline; filename="{fname}"')
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(content)
+            except Exception as e:
+                self.send_error(500, f"Error reading file: {e}")
 
         elif path == "/api/qr":
             target_url = query.get("url", [""])[0]
@@ -672,7 +842,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
         # Protected endpoints below require PIN authentication
-        elif path in ["/api/status", "/api/conversations", "/api/transcript", "/api/limits", "/api/html_files"]:
+        elif path in ["/api/status", "/api/conversations", "/api/transcript", "/api/limits", "/api/html_files", "/api/files", "/api/raw_file"]:
             if not self.check_auth():
                 self.send_json({"error": "Unauthorized. PIN required.", "auth_required": True}, code=401)
                 return
@@ -701,6 +871,32 @@ class RemoteHandler(BaseHTTPRequestHandler):
             elif path == "/api/html_files":
                 files = list_workspace_html_files()
                 self.send_json({"files": files})
+
+            elif path == "/api/files":
+                active_id = query.get("cid", [get_latest_conversation_id()])[0]
+                files = list_generated_files(active_id)
+                self.send_json({"files": files, "total": len(files), "active_id": active_id})
+
+            elif path == "/api/raw_file":
+                rel_path = query.get("path", [""])[0]
+                target_path = resolve_safe_filepath(rel_path)
+                if not target_path or not os.path.isfile(target_path):
+                    self.send_json({"error": "File not found"}, code=404)
+                    return
+                try:
+                    with open(target_path, "r", encoding="utf-8", errors="ignore") as f:
+                        text_content = f.read()
+                    ftype, icon = get_file_type_meta(target_path)
+                    self.send_json({
+                        "name": os.path.basename(target_path),
+                        "path": rel_path,
+                        "type": ftype,
+                        "icon": icon,
+                        "size": os.path.getsize(target_path),
+                        "content": text_content
+                    })
+                except Exception as e:
+                    self.send_json({"error": str(e)}, code=500)
 
             elif path == "/api/transcript":
                 default_id = get_latest_conversation_id()
