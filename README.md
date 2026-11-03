@@ -12,6 +12,12 @@
 
 ## ✨ Features
 
+- 📱 **Native Android Mobile App (.apk)**:
+  - Standalone Android app (`com.antigravity.mobile`) with complete feature parity.
+  - Native camera capture & gallery file chooser for one-tap photo attachments.
+  - Built-in server host switcher: toggle between Cloudflare Tunnel, Local Wi-Fi, Tailscale, or custom domain.
+  - Integrated KaTeX math, files explorer, live HTML sandbox, shell terminal, and PIN lock.
+  - Instant direct download link at `/download/apk` and push delivery via Telegram bot.
 - 📁 **Generated Files Explorer & Interactive In-App Viewer**:
   - Dedicated **Files** tab discovering artifacts across active and past Antigravity sessions (`brain/`), workspace documents (`.md`, `.html`, `.pdf`, `.png`, `.py`, etc.), and mobile uploads.
   - Interactive search bar and category filters (All, 📝 Docs & MD, 🌐 HTML Web, 📕 PDF, 🖼️ Images, 💻 Code).
@@ -21,7 +27,7 @@
   - When asked via `/ask` or photo message, streams tool execution status and **delivers Antigravity's final answer directly into Telegram**!
   - Interactive session selector: choose current session, past sessions, or start a new task.
   - Receive instant push notifications with new links & QR codes whenever the PC reboots or server restarts.
-  - Commands: `/link`, `/status`, `/limits`, `/restart`, `/start_service`, `/stop`, `/files`, `/pin`, `/ask`, `/cmd`.
+  - Commands: `/link`, `/status`, `/limits`, `/restart`, `/start_service`, `/stop`, `/files`, `/apk`, `/pin`, `/ask`, `/cmd`.
 - 📷 **Direct Camera & Photo Input**:
   - One-tap mobile camera capture (`capture="environment"`) to snap and attach photos directly from your phone.
   - Instant image thumbnail preview before sending.

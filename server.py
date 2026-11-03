@@ -787,11 +787,30 @@ class RemoteHandler(BaseHTTPRequestHandler):
                     ".ico": "image/x-icon",
                     ".woff2": "font/woff2",
                     ".woff": "font/woff",
-                    ".ttf": "font/ttf"
+                    ".ttf": "font/ttf",
+                    ".apk": "application/vnd.android.package-archive"
                 }.get(ext, "application/octet-stream")
                 self.serve_file(file_path, ctype)
             else:
                 self.send_error(404, "File Not Found")
+
+        elif path in ["/download/apk", "/download_apk", "/app.apk", "/antigravity.apk"]:
+            apk_path = os.path.join(WEB_DIR, "antigravity-mobile.apk")
+            if os.path.isfile(apk_path):
+                fname = "antigravity-mobile.apk"
+                try:
+                    with open(apk_path, "rb") as f:
+                        content = f.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/vnd.android.package-archive")
+                    self.send_header("Content-Length", str(len(content)))
+                    self.send_header("Content-Disposition", f'attachment; filename="{fname}"')
+                    self.end_headers()
+                    self.wfile.write(content)
+                except Exception as e:
+                    self.send_error(500, f"Error reading APK: {e}")
+            else:
+                self.send_error(404, "APK Not Found")
 
         elif path.startswith("/uploads/"):
             fname = os.path.basename(path)

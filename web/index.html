@@ -173,6 +173,20 @@ Type any command below to execute directly on the PC.
 
     <!-- TAB 3: Connect & QR Info -->
     <section class="tab-pane" id="infoPane">
+      <div class="info-card" style="border: 1px solid rgba(56, 189, 248, 0.4); background: linear-gradient(180deg, rgba(56, 189, 248, 0.08), rgba(13, 17, 23, 0.9));">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+          <h3 style="margin: 0; color: #38bdf8;">📱 Antigravity Mobile App (APK)</h3>
+          <span style="background: rgba(56, 189, 248, 0.2); color: #38bdf8; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: bold;">v1.0.0</span>
+        </div>
+        <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 12px;">Install the native Android app on your phone for full feature parity, direct camera capture, KaTeX math rendering, and fullscreen experience.</p>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <a href="/download/apk" download="antigravity-mobile.apk" style="display: inline-flex; align-items: center; gap: 6px; background: linear-gradient(135deg, #0284c7, #38bdf8); color: white; text-decoration: none; padding: 9px 15px; border-radius: 8px; font-weight: 600; font-size: 13px; box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3);">
+            ⬇️ Download APK (28.9 KB)
+          </a>
+          <button onclick="copyApkLink()" class="file-card-btn" style="padding: 9px 12px; font-size: 12px; cursor: pointer;">📋 Copy Link</button>
+        </div>
+      </div>
+
       <div class="info-card">
         <h3>📱 Mobile Connection QR Code</h3>
         <p style="font-size: 13px; color: var(--text-muted);">Scan this QR code with any phone or tablet on Mobile Data or Wi-Fi to open this controller.</p>

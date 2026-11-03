@@ -1284,3 +1284,8 @@ if (filesSearchInput) {
     renderGeneratedFiles();
   });
 }
+
+function copyApkLink(btn) {
+  const link = window.location.origin + "/download/apk";
+  copyTextToClipboard(link, btn || event.target);
+}

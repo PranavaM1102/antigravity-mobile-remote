@@ -42,7 +42,8 @@ def escape_html(text):
 DEFAULT_KEYBOARD = {
     "keyboard": [
         [{"text": "🔗 Get Link"}, {"text": "📊 Status"}, {"text": "📈 Limits"}],
-        [{"text": "📁 Files"}, {"text": "🔄 Restart Service"}, {"text": "🛑 Stop Service"}]
+        [{"text": "📁 Files"}, {"text": "📱 Get APK"}, {"text": "🔄 Restart Service"}],
+        [{"text": "🟢 Start Service"}, {"text": "🛑 Stop Service"}]
     ],
     "resize_keyboard": True,
     "is_persistent": True
@@ -211,6 +212,24 @@ class TelegramBot:
             payload["show_alert"] = show_alert
         return self.call_api("answerCallbackQuery", payload)
 
+    def send_document(self, chat_id, doc_path, caption="", with_keyboard=True):
+        if not os.path.isfile(doc_path):
+            return self.send_message(chat_id, f"❌ File not found: {doc_path}", with_keyboard=with_keyboard)
+        try:
+            fname = os.path.basename(doc_path)
+            with open(doc_path, "rb") as f:
+                doc_data = f.read()
+            data = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
+            if with_keyboard:
+                data["reply_markup"] = json.dumps(DEFAULT_KEYBOARD)
+            return self.call_api(
+                "sendDocument",
+                data=data,
+                files={"document": (fname, doc_data, "application/vnd.android.package-archive")}
+            )
+        except Exception as e:
+            return self.send_message(chat_id, f"{caption}\n(Error sending document: {e})", with_keyboard=with_keyboard)
+
     def send_photo(self, chat_id, photo_path, caption="", with_keyboard=True):
         if not os.path.isfile(photo_path):
             return self.send_message(chat_id, caption, with_keyboard=with_keyboard)
@@ -297,6 +316,7 @@ class TelegramBot:
         elif clean_text == "📊 Status": cmd = "/status"
         elif clean_text == "📈 Limits": cmd = "/limits"
         elif clean_text == "📁 Files": cmd = "/files"
+        elif clean_text == "📱 Get APK": cmd = "/apk"
         elif clean_text == "🔄 Restart Service": cmd = "/restart"
         elif clean_text == "🟢 Start Service": cmd = "/start_service"
         elif clean_text == "🛑 Stop Service": cmd = "/stop"
@@ -310,6 +330,8 @@ class TelegramBot:
             self.cmd_limits(chat_id)
         elif cmd in ["/files", "/file", "/generated", "/docs"]:
             self.cmd_files(chat_id)
+        elif cmd in ["/apk", "/app", "/download_apk", "/android"]:
+            self.cmd_apk(chat_id)
         elif cmd in ["/restart", "/restart_service"]:
             self.cmd_restart(chat_id)
         elif cmd in ["/start_service", "/startserver"]:
@@ -479,6 +501,35 @@ class TelegramBot:
             lines.append("<i>Start service to view or download files online.</i>")
 
         self.send_message(chat_id, "\n".join(lines))
+
+    def cmd_apk(self, chat_id):
+        apk_path = os.path.join(BASE_DIR, "web", "antigravity-mobile.apk")
+        if not os.path.isfile(apk_path):
+            apk_path = os.path.join(WORKSPACE_DIR, "mobile-app", "build", "antigravity-mobile.apk")
+
+        if not os.path.isfile(apk_path):
+            self.send_message(chat_id, "⚠️ APK file not found on server. Please run the build script.")
+            return
+
+        size_kb = round(os.path.getsize(apk_path) / 1024, 1)
+        tunnel = get_tunnel_url()
+        download_link = f"{tunnel}/web/antigravity-mobile.apk" if tunnel else "http://192.168.1.11:8080/web/antigravity-mobile.apk"
+
+        caption = (
+            "📱 <b>Antigravity Mobile Android App</b>\n\n"
+            f"⚡ <b>Version:</b> 1.0.0 ({size_kb} KB)\n"
+            f"🔗 <b>Direct Link:</b> <a href=\"{download_link}\">Download APK</a>\n\n"
+            "✨ <b>Features:</b>\n"
+            "• Complete parity with Web Controller\n"
+            "• Live Agent Chat &amp; KaTeX Math Rendering\n"
+            "• Generated Files Explorer &amp; In-App Viewer\n"
+            "• HTML Live Preview &amp; Sandbox\n"
+            "• Host Switcher (Cloudflare / Wi-Fi / Custom)\n"
+            "• Native Camera &amp; Voice Input\n\n"
+            "<i>Tap the file above to install directly on Android!</i>"
+        )
+        self.send_message(chat_id, "⏳ <i>Uploading Antigravity Mobile APK to Telegram...</i>")
+        self.send_document(chat_id, apk_path, caption=caption)
 
     def cmd_restart(self, chat_id):
         if self.is_restarting:
@@ -946,6 +997,7 @@ class TelegramBot:
             f"📊 <b>/status</b> - Get PC CPU, RAM, and Disk metrics\n"
             f"📈 <b>/limits</b> - View AI context window &amp; token quotas\n"
             f"📁 <b>/files</b> - Browse generated artifacts &amp; documents\n"
+            f"📱 <b>/apk</b> - Download Antigravity Mobile Android APK\n"
             f"🔄 <b>/restart</b> - Stop &amp; restart server with fresh tunnel\n"
             f"🟢 <b>/start_service</b> - Start mobile server if stopped\n"
             f"🛑 <b>/stop</b> - Stop mobile server &amp; tunnel\n"
