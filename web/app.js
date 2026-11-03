@@ -357,6 +357,48 @@ sessionSelect.addEventListener("change", (e) => {
 });
 
 // Fetch and Render Transcript
+
+// ==========================================================
+// Automatic Tunnel Reconnect & Link Resolver
+// ==========================================================
+let consecutiveConnectionErrors = 0;
+let isAutoRedirecting = false;
+
+async function checkAndAutoRedirectToNewTunnel() {
+  if (isAutoRedirecting) return;
+  try {
+    const res = await fetch("https://ntfy.sh/antigravity_tunnel_pranava1102/json?poll=1");
+    if (!res.ok) return;
+    const text = await res.text();
+    const matches = text.match(/https:\/\/[a-zA-Z0-9\-]+\.trycloudflare\.com/g);
+    if (matches && matches.length > 0) {
+      const latestUrl = matches[matches.length - 1];
+      if (latestUrl && !window.location.href.startsWith(latestUrl)) {
+        isAutoRedirecting = true;
+        updateStatus("Tunnel updated! Redirecting...", "working");
+        setTimeout(() => {
+          window.location.href = latestUrl;
+        }, 1500);
+      }
+    }
+  } catch (e) {
+    // Secondary GitHub fallback
+    try {
+      const ghRes = await fetch("https://raw.githubusercontent.com/PranavaM1102/antigravity-mobile-remote/main/tunnel_url.txt");
+      if (ghRes.ok) {
+        const ghUrl = (await ghRes.text()).trim();
+        if (ghUrl.startsWith("https://") && !window.location.href.startsWith(ghUrl)) {
+          isAutoRedirecting = true;
+          updateStatus("Tunnel updated! Redirecting...", "working");
+          setTimeout(() => {
+            window.location.href = ghUrl;
+          }, 1500);
+        }
+      }
+    } catch (err2) {}
+  }
+}
+
 async function fetchTranscript(forceScroll = false) {
   if (!activeConversationId) return;
   try {
@@ -370,6 +412,10 @@ async function fetchTranscript(forceScroll = false) {
   } catch (err) {
     if (err.message !== "Authentication required") {
       updateStatus("Connecting...", "offline");
+      consecutiveConnectionErrors++;
+      if (consecutiveConnectionErrors >= 2) {
+        checkAndAutoRedirectToNewTunnel();
+      }
     }
   }
 }

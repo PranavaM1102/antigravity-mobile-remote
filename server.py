@@ -226,6 +226,30 @@ def start_cloudflared_tunnel():
                 except Exception:
                     pass
 
+                def publish_resolver(url):
+                    # 1. Post to ntfy resolver for instant mobile auto-update
+                    try:
+                        req = urllib.request.Request(
+                            "https://ntfy.sh/antigravity_tunnel_pranava1102",
+                            data=url.encode("utf-8"),
+                            headers={"User-Agent": "AntigravityServer"}
+                        )
+                        urllib.request.urlopen(req, timeout=5)
+                        print("  [+] Published new tunnel URL to mobile auto-resolver!")
+                    except Exception as ex:
+                        print(f"  [!] Resolver publish notice: {ex}")
+
+                    # 2. Push to GitHub as permanent secondary resolver
+                    try:
+                        subprocess.run(["git", "add", "tunnel_url.txt"], cwd=BASE_DIR, capture_output=True, timeout=10)
+                        subprocess.run(["git", "commit", "-m", "chore: auto-update tunnel url [skip ci]"], cwd=BASE_DIR, capture_output=True, timeout=10)
+                        subprocess.run(["git", "push", "origin", "main"], cwd=BASE_DIR, capture_output=True, timeout=15)
+                        print("  [+] Pushed new tunnel URL to GitHub repository!")
+                    except Exception as ex:
+                        print(f"  [!] Git push notice: {ex}")
+
+                threading.Thread(target=publish_resolver, args=(PUBLIC_TUNNEL_URL,), daemon=True).start()
+
                 try:
                     qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(PUBLIC_TUNNEL_URL)}"
                     qr_path = os.path.join(BASE_DIR, "qr_internet.png")
