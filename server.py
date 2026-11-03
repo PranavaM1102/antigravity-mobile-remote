@@ -784,7 +784,10 @@ class RemoteHandler(BaseHTTPRequestHandler):
                     ".json": "application/json; charset=utf-8",
                     ".png": "image/png",
                     ".svg": "image/svg+xml",
-                    ".ico": "image/x-icon"
+                    ".ico": "image/x-icon",
+                    ".woff2": "font/woff2",
+                    ".woff": "font/woff",
+                    ".ttf": "font/ttf"
                 }.get(ext, "application/octet-stream")
                 self.serve_file(file_path, ctype)
             else:

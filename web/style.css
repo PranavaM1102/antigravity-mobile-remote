@@ -1420,3 +1420,37 @@ main {
   background: #0284c7;
   color: #ffffff;
 }
+
+
+/* ==========================================================
+   KaTeX Mathematical Notation Styles
+   ========================================================== */
+.katex {
+  font-size: 1.05em;
+  text-rendering: auto;
+}
+
+.katex-display {
+  display: block;
+  margin: 0.8em 0;
+  text-align: center;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 0;
+  -webkit-overflow-scrolling: touch;
+}
+
+.katex-display::-webkit-scrollbar {
+  height: 4px;
+}
+
+.katex-display::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 2px;
+}
+
+.katex-error {
+  color: var(--accent-red);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}

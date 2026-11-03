@@ -472,6 +472,26 @@ function addCopyButtonsToBubble(bubble, rawText) {
   });
 }
 
+// KaTeX Mathematical Notation Renderer
+function renderMath(element) {
+  if (typeof renderMathInElement !== "undefined" && element) {
+    try {
+      renderMathInElement(element, {
+        delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "\\[", right: "\\]", display: true },
+          { left: "\\(", right: "\\)", display: false },
+          { left: "$", right: "$", display: false }
+        ],
+        throwOnError: false,
+        ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code", "option"]
+      });
+    } catch (e) {
+      console.warn("KaTeX render error:", e);
+    }
+  }
+}
+
 function buildMessageElement(step) {
   const wrapper = document.createElement("div");
   wrapper.className = `message-wrapper ${step.sender}`;
@@ -532,9 +552,11 @@ function buildMessageElement(step) {
       });
     }
     bubble.innerHTML = html || "<span style='color:var(--text-muted);'>Processing...</span>";
+    renderMath(bubble);
     addCopyButtonsToBubble(bubble, step.text);
   } else {
     bubble.textContent = step.text;
+    renderMath(bubble);
   }
 
   wrapper.appendChild(bubble);
@@ -1150,6 +1172,7 @@ async function openFileViewer(file) {
       
       const parsedHtml = (typeof marked !== "undefined") ? marked.parse(rawText) : `<pre>${escapeHtml(rawText)}</pre>`;
       fileViewerBody.innerHTML = `<div class="file-viewer-markdown">${parsedHtml}</div>`;
+      renderMath(fileViewerBody);
       
       if (fileViewerCopyBtn) {
         fileViewerCopyBtn.style.display = "block";
