@@ -81,20 +81,116 @@ def list_workspace_html_files():
     html_files.sort(key=lambda x: x["mtime"], reverse=True)
     return html_files
 
-# Detect agentapi executable
+# Detect agentapi executable (Direct binary preferred to preserve multiline prompts with Enter keys)
 if sys.platform == "win32":
     CLOUDFLARED_NAME = "cloudflared.exe"
-    DEFAULT_AGENTAPI = os.path.join(HOME_DIR, ".gemini", "antigravity", "bin", "agentapi.bat")
+    LS_EXE = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\Pranava\AppData\Local"), "Programs", "antigravity", "resources", "bin", "language_server.exe")
+    if os.path.isfile(LS_EXE):
+        DEFAULT_AGENTAPI_CMD = [LS_EXE, "agentapi"]
+    else:
+        DEFAULT_AGENTAPI_CMD = [os.path.join(HOME_DIR, ".gemini", "antigravity", "bin", "agentapi.bat")]
 else:
     CLOUDFLARED_NAME = "cloudflared"
-    DEFAULT_AGENTAPI = os.path.join(HOME_DIR, ".gemini", "antigravity", "bin", "agentapi")
+    DEFAULT_AGENTAPI_CMD = [os.path.join(HOME_DIR, ".gemini", "antigravity", "bin", "agentapi")]
 
-AGENTAPI_BIN = os.environ.get("AGENTAPI_BIN", DEFAULT_AGENTAPI)
+AGENTAPI_CMD = DEFAULT_AGENTAPI_CMD
 CLOUDFLARED_EXE = os.path.join(BASE_DIR, CLOUDFLARED_NAME)
 
 PUBLIC_TUNNEL_URL = None
 TUNNEL_PROCESS = None
 VALID_TOKENS = set()
+
+def get_language_server_info():
+    """Discover the active HTTP port and CSRF token for the Antigravity Language Server."""
+    log_path = os.path.expanduser(r"~\AppData\Roaming\antigravity\logs\language_server.log")
+    http_port = None
+    if os.path.isfile(log_path):
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()[-300:]
+            for line in reversed(lines):
+                m = re.search(r"listening on random port at (\d+) for HTTP", line)
+                if m:
+                    http_port = int(m.group(1))
+                    break
+        except Exception:
+            pass
+
+    # Fallback to finding listening port of language_server process
+    if not http_port and sys.platform == "win32":
+        try:
+            ps_cmd = "(Get-NetTCPConnection -OwningProcess (Get-Process language_server -ErrorAction SilentlyContinue).Id -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty LocalPort)"
+            res = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, text=True, timeout=5)
+            if res.returncode == 0:
+                ports = [int(p.strip()) for p in res.stdout.strip().split() if p.strip().isdigit()]
+                for p in ports:
+                    try:
+                        req = urllib.request.Request(f"http://127.0.0.1:{p}/")
+                        with urllib.request.urlopen(req, timeout=1) as r:
+                            if b"__APP_CONFIG__" in r.read():
+                                http_port = p
+                                break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    if not http_port:
+        return None, None
+
+    # Retrieve CSRF token from language server app config
+    csrf_token = None
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{http_port}/")
+        with urllib.request.urlopen(req, timeout=2) as r:
+            html_text = r.read().decode("utf-8", errors="ignore")
+            m = re.search(r'"csrfToken":"([^"]+)"', html_text)
+            if m:
+                csrf_token = m.group(1)
+    except Exception as e:
+        print(f"Error extracting CSRF token: {e}")
+
+    return http_port, csrf_token
+
+
+def cancel_conversation(cid):
+    """Cancels the active invocation / prompt in the given conversation."""
+    if not cid:
+        return False, "No active conversation ID provided"
+
+    port, token = get_language_server_info()
+    if not port or not token:
+        return False, "Could not discover Antigravity Language Server port or CSRF token"
+
+    # 1. Try CancelCascadeInvocation
+    url_cancel = f"http://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/CancelCascadeInvocation"
+    payload_cancel = json.dumps({"cascadeId": cid, "killBackgroundTasks": True}).encode("utf-8")
+    req = urllib.request.Request(url_cancel, data=payload_cancel, headers={
+        "Content-Type": "application/json",
+        "x-codeium-csrf-token": token,
+        "Connect-Protocol-Version": "1"
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return True, "Active prompt cancelled successfully"
+    except urllib.error.HTTPError as he:
+        # 2. Try fallback ForceStopCascadeTree
+        try:
+            url_stop = f"http://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/ForceStopCascadeTree"
+            payload_stop = json.dumps({"conversationId": cid}).encode("utf-8")
+            req_stop = urllib.request.Request(url_stop, data=payload_stop, headers={
+                "Content-Type": "application/json",
+                "x-codeium-csrf-token": token,
+                "Connect-Protocol-Version": "1"
+            })
+            with urllib.request.urlopen(req_stop, timeout=5) as resp2:
+                return True, "Prompt cancelled (cascade stopped)"
+        except Exception:
+            pass
+        err_body = he.read().decode("utf-8", errors="ignore")
+        return False, f"Cancel error: {err_body}"
+    except Exception as e:
+        return False, str(e)
 
 def get_configured_pin():
     if os.path.isfile(PIN_FILE):
@@ -1008,7 +1104,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
             def execute_send():
                 try:
                     subprocess.run(
-                        [AGENTAPI_BIN, "send-message", cid, content],
+                        AGENTAPI_CMD + ["send-message", cid, content],
                         capture_output=True,
                         text=True,
                         timeout=30
@@ -1019,6 +1115,17 @@ class RemoteHandler(BaseHTTPRequestHandler):
             t = threading.Thread(target=execute_send, daemon=True)
             t.start()
             self.send_json({"status": "sent", "conversation_id": cid, "content": content, "uploaded_image": uploaded_fname})
+
+        elif path == "/api/cancel":
+            cid = data.get("conversation_id", "").strip() or get_latest_conversation_id()
+            if not cid:
+                self.send_json({"error": "No conversation specified"}, code=400)
+                return
+            ok, msg = cancel_conversation(cid)
+            if ok:
+                self.send_json({"status": "cancelled", "conversation_id": cid, "message": msg})
+            else:
+                self.send_json({"error": msg, "conversation_id": cid}, code=500)
 
         elif path == "/api/new_conversation":
             prompt = data.get("prompt", "").strip()
@@ -1032,7 +1139,7 @@ class RemoteHandler(BaseHTTPRequestHandler):
             def execute_new():
                 try:
                     subprocess.run(
-                        [AGENTAPI_BIN, "new-conversation", f"--model={model}", prompt],
+                        AGENTAPI_CMD + ["new-conversation", f"--model={model}", prompt],
                         capture_output=True,
                         text=True,
                         timeout=30

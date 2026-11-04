@@ -550,6 +550,43 @@ main {
   color: white;
 }
 
+.cancel-btn {
+  background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+  color: white !important;
+  border: none !important;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+  animation: pulseCancel 1.5s infinite;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+@keyframes pulseCancel {
+  0% { transform: scale(1); box-shadow: 0 0 6px rgba(239, 68, 68, 0.4); }
+  50% { transform: scale(1.06); box-shadow: 0 0 14px rgba(239, 68, 68, 0.7); }
+  100% { transform: scale(1); box-shadow: 0 0 6px rgba(239, 68, 68, 0.4); }
+}
+
+.cancel-btn.hidden {
+  display: none !important;
+}
+
+.chat-notice.cancel-notice {
+  align-self: center;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 11.5px;
+  font-weight: 600;
+  margin: 8px auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Terminal Tab */
 #terminalPane {
   background: #090d16;

@@ -162,7 +162,20 @@ tabBtns.forEach(btn => {
 // Auto-expand textarea on typing & Enter
 promptInput.addEventListener("input", function() {
   this.style.height = "auto";
-  this.style.height = Math.min(this.scrollHeight, 120) + "px";
+  this.style.height = Math.min(this.scrollHeight, 140) + "px";
+});
+
+// Smart Enter handling for both mobile and desktop
+promptInput.addEventListener("keydown", function(e) {
+  if (e.key === "Enter") {
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    // On desktop: Enter sends message (Shift+Enter inserts newline)
+    // On mobile: Ctrl+Enter or Cmd+Enter sends message; regular Enter creates newline for multiline typing
+    if ((e.ctrlKey || e.metaKey) || (!isMobile && !e.shiftKey)) {
+      e.preventDefault();
+      sendMessage();
+    }
+  }
 });
 
 // Detect scroll to toggle autoScroll
@@ -772,6 +785,57 @@ function startPolling() {
 function updateStatus(text, dotClass) {
   statusText.textContent = text;
   statusDot.className = "status-dot " + dotClass;
+  const cancelBtn = document.getElementById("cancelPromptBtn");
+  if (cancelBtn) {
+    if (dotClass === "working" || (pendingMessages && pendingMessages.length > 0)) {
+      cancelBtn.classList.remove("hidden");
+    } else {
+      cancelBtn.classList.add("hidden");
+    }
+  }
+}
+
+// ==========================================================
+// Cancel Active Prompt Execution
+// ==========================================================
+async function cancelActivePrompt() {
+  const cancelBtn = document.getElementById("cancelPromptBtn");
+  if (cancelBtn) {
+    cancelBtn.disabled = true;
+    cancelBtn.textContent = "⏳";
+  }
+  if (navigator.vibrate) navigator.vibrate([30, 30]);
+
+  try {
+    const res = await authFetch("/api/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversation_id: activeConversationId })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      pendingMessages = [];
+      updateStatus("Connected", "online");
+      if (cancelBtn) cancelBtn.classList.add("hidden");
+
+      const cancelNotice = document.createElement("div");
+      cancelNotice.className = "chat-notice cancel-notice";
+      cancelNotice.innerHTML = `<span>⏹️ Prompt cancelled</span>`;
+      chatContainer.appendChild(cancelNotice);
+      scrollToBottom();
+
+      setTimeout(() => fetchTranscript(true), 600);
+    } else {
+      alert("Failed to cancel: " + (data.error || "Unknown error"));
+    }
+  } catch (err) {
+    console.error("Cancel error:", err);
+  } finally {
+    if (cancelBtn) {
+      cancelBtn.disabled = false;
+      cancelBtn.textContent = "⏹️";
+    }
+  }
 }
 
 // Speech to text (Voice Input)

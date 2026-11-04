@@ -30,7 +30,12 @@ TUNNEL_FILE = os.path.join(BASE_DIR, "tunnel_url.txt")
 PIN_FILE = os.path.join(BASE_DIR, "pin.txt")
 QR_FILE = os.path.join(BASE_DIR, "qr_internet.png")
 SERVER_PY = os.path.join(BASE_DIR, "server.py")
-AGENTAPI_BAT = os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "bin", "agentapi.bat")
+LS_EXE = os.path.join(os.environ.get("LOCALAPPDATA", r"C:\Users\Pranava\AppData\Local"), "Programs", "antigravity", "resources", "bin", "language_server.exe")
+if os.path.isfile(LS_EXE):
+    AGENTAPI_CMD = [LS_EXE, "agentapi"]
+else:
+    AGENTAPI_CMD = [os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "bin", "agentapi.bat")]
+
 WORKSPACE_DIR = r"D:\_ide\Antigravity"
 BRAIN_DIR = os.environ.get("ANTIGRAVITY_BRAIN", os.path.join(os.path.expanduser("~"), ".gemini", "antigravity", "brain"))
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
@@ -42,8 +47,8 @@ def escape_html(text):
 DEFAULT_KEYBOARD = {
     "keyboard": [
         [{"text": "🔗 Get Link"}, {"text": "📊 Status"}, {"text": "📈 Limits"}],
-        [{"text": "✨ New Session"}, {"text": "📁 Files"}, {"text": "📱 Get APK"}],
-        [{"text": "🔄 Restart Service"}, {"text": "🟢 Start Service"}, {"text": "🛑 Stop Service"}]
+        [{"text": "✨ New Session"}, {"text": "⏹️ Cancel Prompt"}, {"text": "📁 Files"}],
+        [{"text": "📱 Get APK"}, {"text": "🔄 Restart Service"}, {"text": "🛑 Stop Service"}]
     ],
     "resize_keyboard": True,
     "is_persistent": True
@@ -316,6 +321,7 @@ class TelegramBot:
         elif clean_text == "📊 Status": cmd = "/status"
         elif clean_text == "📈 Limits": cmd = "/limits"
         elif clean_text in ["✨ New Session", "✨ + New Session"]: cmd = "/new"
+        elif clean_text in ["⏹️ Cancel Prompt", "⏹️ Cancel", "Cancel Prompt"]: cmd = "/cancel"
         elif clean_text == "📁 Files": cmd = "/files"
         elif clean_text == "📱 Get APK": cmd = "/apk"
         elif clean_text == "🔄 Restart Service": cmd = "/restart"
@@ -345,6 +351,8 @@ class TelegramBot:
             self.cmd_shell(chat_id, " ".join(args))
         elif cmd in ["/new", "/new_session", "/spawn"]:
             self.cmd_new(chat_id, " ".join(args))
+        elif cmd in ["/cancel", "/cancel_prompt", "/abort"]:
+            self.cmd_cancel(chat_id)
         elif cmd in ["/ask", "/prompt"]:
             self.cmd_ask(chat_id, " ".join(args))
         elif cmd in ["/help", "/menu"]:
@@ -674,7 +682,7 @@ class TelegramBot:
         def run_new_session():
             try:
                 existing_cids = set(os.listdir(BRAIN_DIR)) if os.path.exists(BRAIN_DIR) else set()
-                subprocess.run([AGENTAPI_BAT, "new-conversation", clean_prompt], capture_output=True, text=True, timeout=25)
+                subprocess.run(AGENTAPI_CMD + ["new-conversation", clean_prompt], capture_output=True, text=True, timeout=25)
                 new_cid = None
                 for _ in range(12):
                     time.sleep(1)
@@ -695,7 +703,7 @@ class TelegramBot:
                         chat_id,
                         msg_id,
                         f"⏳ <b>Antigravity New Session Active!</b>\n💬 <i>\"{safe_prompt}\"</i>\n\n<i>Waiting for agent response...</i>",
-                        reply_markup={"inline_keyboard": []}
+                        reply_markup={"inline_keyboard": [[{"text": "⏹️ Cancel Prompt", "callback_data": f"cancel_prompt:{new_cid}"}]]}
                     )
                     self.monitor_and_send_final_output(chat_id, msg_id, new_cid, -1, clean_prompt)
                 else:
@@ -704,6 +712,18 @@ class TelegramBot:
                 self.send_message(chat_id, f"❌ Failed to create new session: {escape_html(str(e))}")
 
         threading.Thread(target=run_new_session, daemon=True).start()
+
+    def cmd_cancel(self, chat_id):
+        from server import cancel_conversation, get_latest_conversation_id
+        cid = get_latest_conversation_id()
+        if not cid:
+            self.send_message(chat_id, "⚠️ No active conversation found.")
+            return
+        ok, msg = cancel_conversation(cid)
+        if ok:
+            self.send_message(chat_id, f"⏹️ <b>Prompt Cancelled</b>\n\nActive prompt in session <code>{cid[:8]}</code> has been halted.")
+        else:
+            self.send_message(chat_id, f"⚠️ Cancel status: {escape_html(msg)}")
 
     def cmd_ask(self, chat_id, prompt):
         if not prompt or not prompt.strip():
@@ -777,6 +797,18 @@ class TelegramBot:
         if not chat_id or not self.is_authorized(chat_id):
             return
 
+        if data.startswith("cancel_prompt:"):
+            target_cid = data[len("cancel_prompt:"):]
+            from server import cancel_conversation
+            ok, msg = cancel_conversation(target_cid)
+            self.edit_message_text(
+                chat_id,
+                message_id,
+                f"⏹️ <b>Prompt Cancelled</b>\n\nSession <code>{target_cid[:8]}</code> has been halted.\n<i>{escape_html(msg)}</i>",
+                reply_markup={"inline_keyboard": []}
+            )
+            return
+
         if not data.startswith("ask_cid:"):
             return
 
@@ -814,7 +846,7 @@ class TelegramBot:
             def run_new():
                 try:
                     existing_cids = set(os.listdir(BRAIN_DIR)) if os.path.exists(BRAIN_DIR) else set()
-                    res = subprocess.run([AGENTAPI_BAT, "new-conversation", prompt], capture_output=True, text=True, timeout=25)
+                    res = subprocess.run(AGENTAPI_CMD + ["new-conversation", prompt], capture_output=True, text=True, timeout=25)
                     new_cid = None
                     for _ in range(12):
                         time.sleep(1)
@@ -822,7 +854,9 @@ class TelegramBot:
                             curr_cids = set(os.listdir(BRAIN_DIR))
                             diff = curr_cids - existing_cids
                             if diff:
-                                new_cid = list(diff)[0]
+                                candidates = list(diff)
+                                candidates.sort(key=lambda c: os.path.getmtime(os.path.join(BRAIN_DIR, c)), reverse=True)
+                                new_cid = candidates[0]
                                 break
                     if not new_cid:
                         from server import get_latest_conversation_id
@@ -832,7 +866,7 @@ class TelegramBot:
                         chat_id,
                         message_id,
                         f"⏳ <b>Antigravity New Session Active!</b>\n💬 <i>\"{safe_prompt}\"</i>\n\n<i>Waiting for agent response...</i>",
-                        reply_markup={"inline_keyboard": []}
+                        reply_markup={"inline_keyboard": [[{"text": "⏹️ Cancel Prompt", "callback_data": f"cancel_prompt:{new_cid}"}]]}
                     )
                     self.monitor_and_send_final_output(chat_id, message_id, new_cid, -1, prompt)
                 except Exception as e:
@@ -850,12 +884,12 @@ class TelegramBot:
             )
             def run_send():
                 try:
-                    res = subprocess.run([AGENTAPI_BAT, "send-message", cid, prompt], capture_output=True, text=True, timeout=20)
+                    res = subprocess.run(AGENTAPI_CMD + ["send-message", cid, prompt], capture_output=True, text=True, timeout=20)
                     self.edit_message_text(
                         chat_id,
                         message_id,
                         f"⏳ <b>Prompt Received by Antigravity!</b>\n💬 <i>\"{safe_prompt}\"</i>\n\n<i>Working on your request... I will post the response here!</i>",
-                        reply_markup={"inline_keyboard": []}
+                        reply_markup={"inline_keyboard": [[{"text": "⏹️ Cancel Prompt", "callback_data": f"cancel_prompt:{cid}"}]]}
                     )
                     self.monitor_and_send_final_output(chat_id, message_id, cid, initial_step, prompt)
                 except Exception as e:
@@ -974,7 +1008,7 @@ class TelegramBot:
                                 f"⏳ <b>Antigravity is working...</b>\n"
                                 f"⚡ Running: <code>{escape_html(last_tool_name)}</code> (Step {s.get('step_index')})\n\n"
                                 f"<i>Output will be posted here automatically!</i>",
-                                reply_markup={"inline_keyboard": []}
+                                reply_markup={"inline_keyboard": [[{"text": "⏹️ Cancel Prompt", "callback_data": f"cancel_prompt:{cid}"}]]}
                             )
                             last_status_update = time.time()
 
@@ -1061,6 +1095,7 @@ class TelegramBot:
             f"🔑 <b>/pin [new_pin]</b> - View or update security PIN\n"
             f"💻 <b>/cmd &lt;command&gt;</b> - Run PowerShell on workstation\n"
             f"✨ <b>/new &lt;prompt&gt;</b> - Start a brand new agent conversation\n"
+            f"⏹️ <b>/cancel</b> - Cancel active running prompt\n"
             f"🤖 <b>/ask &lt;prompt&gt;</b> - Send prompt (interactive session picker)\n"
             f"━━━━━━━━━━━━━━━━━━━"
         )
