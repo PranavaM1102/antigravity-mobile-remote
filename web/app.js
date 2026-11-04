@@ -216,6 +216,7 @@ async function init() {
       }
     }
 
+    initNewSessionModal();
     await loadConversations();
     await fetchTranscript(true);
     fetchLimits();
@@ -333,22 +334,37 @@ async function fetchLimits() {
   }
 }
 
+let knownConversationIds = new Set();
+
 // Load Conversations Dropdown
 async function loadConversations() {
   try {
     const res = await authFetch("/api/conversations");
     const data = await res.json();
     if (data.conversations) {
-      sessionSelect.innerHTML = data.conversations.map(c => `
+      knownConversationIds = new Set(data.conversations.map(c => c.id));
+      const newSessionOption = `<option value="__new_session__">✨ + New Session...</option>`;
+      const options = data.conversations.map(c => `
         <option value="${c.id}" ${c.id === activeConversationId ? "selected" : ""}>
           ${c.is_current ? "⭐ " : ""}${escapeHtml(c.title || c.id.substring(0, 8))}
         </option>
       `).join("");
+      sessionSelect.innerHTML = newSessionOption + options;
+      if (activeConversationId) {
+        sessionSelect.value = activeConversationId;
+      }
     }
   } catch (err) {}
 }
 
 sessionSelect.addEventListener("change", (e) => {
+  if (e.target.value === "__new_session__") {
+    if (activeConversationId) {
+      sessionSelect.value = activeConversationId;
+    }
+    openNewSessionModal();
+    return;
+  }
   activeConversationId = e.target.value;
   chatContainer.innerHTML = "";
   renderedStepMap.clear();
@@ -840,25 +856,197 @@ termInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") runTermCommand(termInput.value.trim());
 });
 
-// Start New Conversation
-async function startNewConversation() {
-  const prompt = document.getElementById("newConvPrompt").value.trim();
-  if (!prompt) return;
+// ==========================================================
+// Interactive New Session Modal & Session Creation
+// ==========================================================
+let selectedSessionModel = "flash";
+
+function initNewSessionModal() {
+  const pills = document.querySelectorAll("#newSessionModelPills .model-pill");
+  pills.forEach(pill => {
+    pill.addEventListener("click", () => {
+      pills.forEach(p => p.classList.remove("active"));
+      pill.classList.add("active");
+      selectedSessionModel = pill.getAttribute("data-model") || "flash";
+    });
+  });
+
+  const promptInputArea = document.getElementById("newSessionPrompt");
+  if (promptInputArea) {
+    promptInputArea.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        submitNewSession();
+      }
+    });
+    promptInputArea.addEventListener("input", () => {
+      promptInputArea.classList.remove("input-error");
+    });
+  }
+
+  // Close on backdrop click
+  const modal = document.getElementById("newSessionModal");
+  if (modal) {
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) {
+        closeNewSessionModal();
+      }
+    });
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      closeNewSessionModal();
+    }
+  });
+}
+
+function openNewSessionModal(prefillPrompt = "") {
+  const modal = document.getElementById("newSessionModal");
+  const textarea = document.getElementById("newSessionPrompt");
+  const statusWrap = document.getElementById("newSessionStatus");
+  const launchBtn = document.getElementById("launchSessionBtn");
+
+  if (!modal) return;
+  if (statusWrap) statusWrap.classList.add("hidden");
+  if (launchBtn) {
+    launchBtn.disabled = false;
+    launchBtn.innerHTML = `<span>🚀 Launch Session</span>`;
+  }
+
+  if (textarea) {
+    textarea.value = prefillPrompt || "";
+    textarea.classList.remove("input-error");
+  }
+
+  // Reset model pills to flash
+  selectedSessionModel = "flash";
+  const pills = document.querySelectorAll("#newSessionModelPills .model-pill");
+  pills.forEach(p => {
+    if (p.getAttribute("data-model") === "flash") {
+      p.classList.add("active");
+    } else {
+      p.classList.remove("active");
+    }
+  });
+
+  modal.classList.remove("hidden");
+  setTimeout(() => {
+    if (textarea) textarea.focus();
+  }, 100);
+}
+
+function closeNewSessionModal() {
+  const modal = document.getElementById("newSessionModal");
+  if (modal) modal.classList.add("hidden");
+}
+
+async function submitNewSession(customPrompt = null) {
+  const textarea = document.getElementById("newSessionPrompt");
+  const prompt = (customPrompt !== null ? customPrompt : (textarea ? textarea.value : "")).trim();
+  const statusWrap = document.getElementById("newSessionStatus");
+  const statusText = document.getElementById("newSessionStatusText");
+  const launchBtn = document.getElementById("launchSessionBtn");
+
+  if (!prompt) {
+    if (textarea) {
+      textarea.classList.add("input-error");
+      textarea.focus();
+    }
+    return;
+  }
+
+  if (launchBtn) {
+    launchBtn.disabled = true;
+    launchBtn.innerHTML = `<span>⏳ Launching...</span>`;
+  }
+  if (statusWrap) {
+    statusWrap.classList.remove("hidden");
+    if (statusText) statusText.textContent = "Spawning new agent session...";
+  }
+
   try {
-    await authFetch("/api/new_conversation", {
+    const priorIds = new Set(knownConversationIds);
+    const res = await authFetch("/api/new_conversation", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: prompt, model: "flash" })
+      body: JSON.stringify({ prompt: prompt, model: selectedSessionModel })
     });
-    alert("New conversation started! Loading conversations in 3 seconds...");
-    setTimeout(async () => {
-      await loadConversations();
-      tabBtns[0].click();
-    }, 3000);
-  } catch (e) {
-    if (e.message !== "Authentication required") {
-      alert("Failed to start: " + e.message);
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Server returned ${res.status}`);
     }
+
+    const data = await res.json();
+    let newCid = data.conversation_id;
+
+    // If server didn't return cid immediately, poll for up to 10 seconds
+    if (!newCid) {
+      if (statusText) statusText.textContent = "Connecting to new conversation...";
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise(r => setTimeout(r, 1000));
+        const listRes = await authFetch("/api/conversations");
+        if (listRes.ok) {
+          const listData = await listRes.json();
+          const convs = listData.conversations || [];
+          const found = convs.find(c => !priorIds.has(c.id));
+          if (found) {
+            newCid = found.id;
+            break;
+          }
+          if (attempt >= 2 && convs.length > 0 && convs[0].id !== activeConversationId) {
+            newCid = convs[0].id;
+            break;
+          }
+        }
+      }
+    }
+
+    if (statusText) statusText.textContent = "✨ Session ready! Switching view...";
+    await new Promise(r => setTimeout(r, 400));
+
+    // Reload conversations
+    await loadConversations();
+
+    if (newCid) {
+      activeConversationId = newCid;
+      sessionSelect.value = newCid;
+    }
+
+    // Clear transcript UI and load the new session's messages
+    chatContainer.innerHTML = "";
+    renderedStepMap.clear();
+    lastStepIndex = 0;
+    fetchTranscript(true);
+
+    closeNewSessionModal();
+    if (textarea) textarea.value = "";
+
+    // Switch to Chat tab
+    tabBtns[0].click();
+    scrollToBottom();
+  } catch (err) {
+    if (err.message !== "Authentication required") {
+      alert("Failed to start session: " + err.message);
+    }
+    if (launchBtn) {
+      launchBtn.disabled = false;
+      launchBtn.innerHTML = `<span>🚀 Launch Session</span>`;
+    }
+    if (statusWrap) statusWrap.classList.add("hidden");
+  }
+}
+
+// Start New Conversation (from Info tab or quick actions)
+function startNewConversation() {
+  const promptInput = document.getElementById("newConvPrompt");
+  const prompt = promptInput ? promptInput.value.trim() : "";
+  if (!prompt) {
+    openNewSessionModal();
+  } else {
+    submitNewSession(prompt);
+    if (promptInput) promptInput.value = "";
   }
 }
 
@@ -1334,4 +1522,11 @@ if (filesSearchInput) {
 function copyApkLink(btn) {
   const link = window.location.origin + "/download/apk";
   copyTextToClipboard(link, btn || event.target);
+}
+
+// Ensure session modal events are bound on load
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initNewSessionModal);
+} else {
+  initNewSessionModal();
 }

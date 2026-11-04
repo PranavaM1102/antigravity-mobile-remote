@@ -42,8 +42,8 @@ def escape_html(text):
 DEFAULT_KEYBOARD = {
     "keyboard": [
         [{"text": "🔗 Get Link"}, {"text": "📊 Status"}, {"text": "📈 Limits"}],
-        [{"text": "📁 Files"}, {"text": "📱 Get APK"}, {"text": "🔄 Restart Service"}],
-        [{"text": "🟢 Start Service"}, {"text": "🛑 Stop Service"}]
+        [{"text": "✨ New Session"}, {"text": "📁 Files"}, {"text": "📱 Get APK"}],
+        [{"text": "🔄 Restart Service"}, {"text": "🟢 Start Service"}, {"text": "🛑 Stop Service"}]
     ],
     "resize_keyboard": True,
     "is_persistent": True
@@ -315,6 +315,7 @@ class TelegramBot:
         if clean_text == "🔗 Get Link": cmd = "/link"
         elif clean_text == "📊 Status": cmd = "/status"
         elif clean_text == "📈 Limits": cmd = "/limits"
+        elif clean_text in ["✨ New Session", "✨ + New Session"]: cmd = "/new"
         elif clean_text == "📁 Files": cmd = "/files"
         elif clean_text == "📱 Get APK": cmd = "/apk"
         elif clean_text == "🔄 Restart Service": cmd = "/restart"
@@ -342,6 +343,8 @@ class TelegramBot:
             self.cmd_pin(chat_id, args)
         elif cmd in ["/cmd", "/shell"]:
             self.cmd_shell(chat_id, " ".join(args))
+        elif cmd in ["/new", "/new_session", "/spawn"]:
+            self.cmd_new(chat_id, " ".join(args))
         elif cmd in ["/ask", "/prompt"]:
             self.cmd_ask(chat_id, " ".join(args))
         elif cmd in ["/help", "/menu"]:
@@ -647,6 +650,60 @@ class TelegramBot:
             self.send_message(chat_id, "⏱️ Command timed out (25s limit).")
         except Exception as e:
             self.send_message(chat_id, f"❌ Error: {e}")
+
+    def cmd_new(self, chat_id, prompt):
+        if not prompt or not prompt.strip():
+            self.send_message(
+                chat_id,
+                "💡 <b>Start a New Antigravity Session:</b>\n\n"
+                "Send: <code>/new &lt;what you want Antigravity to do&gt;</code>\n\n"
+                "Example:\n<code>/new Build a landing page with hero header and contact form</code>\n\n"
+                "Antigravity will spawn an isolated session and stream the output back here!"
+            )
+            return
+
+        clean_prompt = prompt.strip()
+        safe_prompt = escape_html(clean_prompt[:120] + ("..." if len(clean_prompt) > 120 else ""))
+
+        msg_res = self.send_message(
+            chat_id,
+            f"✨ <b>Starting New Antigravity Session...</b>\n\n💬 <i>\"{safe_prompt}\"</i>\n\n⏳ Spawning new session with agentapi..."
+        )
+        msg_id = msg_res.get("result", {}).get("message_id") if (msg_res and msg_res.get("ok")) else None
+
+        def run_new_session():
+            try:
+                existing_cids = set(os.listdir(BRAIN_DIR)) if os.path.exists(BRAIN_DIR) else set()
+                subprocess.run([AGENTAPI_BAT, "new-conversation", clean_prompt], capture_output=True, text=True, timeout=25)
+                new_cid = None
+                for _ in range(12):
+                    time.sleep(1)
+                    if os.path.exists(BRAIN_DIR):
+                        curr_cids = set(os.listdir(BRAIN_DIR))
+                        diff = curr_cids - existing_cids
+                        if diff:
+                            candidates = list(diff)
+                            candidates.sort(key=lambda c: os.path.getmtime(os.path.join(BRAIN_DIR, c)), reverse=True)
+                            new_cid = candidates[0]
+                            break
+                if not new_cid:
+                    from server import get_latest_conversation_id
+                    new_cid = get_latest_conversation_id()
+
+                if msg_id:
+                    self.edit_message_text(
+                        chat_id,
+                        msg_id,
+                        f"⏳ <b>Antigravity New Session Active!</b>\n💬 <i>\"{safe_prompt}\"</i>\n\n<i>Waiting for agent response...</i>",
+                        reply_markup={"inline_keyboard": []}
+                    )
+                    self.monitor_and_send_final_output(chat_id, msg_id, new_cid, -1, clean_prompt)
+                else:
+                    self.send_message(chat_id, f"✅ New session started: <code>{new_cid[:8] if new_cid else 'unknown'}</code>")
+            except Exception as e:
+                self.send_message(chat_id, f"❌ Failed to create new session: {escape_html(str(e))}")
+
+        threading.Thread(target=run_new_session, daemon=True).start()
 
     def cmd_ask(self, chat_id, prompt):
         if not prompt or not prompt.strip():
@@ -1003,6 +1060,7 @@ class TelegramBot:
             f"🛑 <b>/stop</b> - Stop mobile server &amp; tunnel\n"
             f"🔑 <b>/pin [new_pin]</b> - View or update security PIN\n"
             f"💻 <b>/cmd &lt;command&gt;</b> - Run PowerShell on workstation\n"
+            f"✨ <b>/new &lt;prompt&gt;</b> - Start a brand new agent conversation\n"
             f"🤖 <b>/ask &lt;prompt&gt;</b> - Send prompt (interactive session picker)\n"
             f"━━━━━━━━━━━━━━━━━━━"
         )

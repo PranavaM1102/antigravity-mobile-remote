@@ -56,6 +56,7 @@
       <select id="sessionSelect" title="Select Conversation">
         <option value="">Loading...</option>
       </select>
+      <button class="header-new-session-btn" id="headerNewSessionBtn" onclick="openNewSessionModal()" title="Start New Session">✨ New</button>
     </div>
     <div class="header-actions">
       <div class="status-badge" id="statusBadge">
@@ -242,6 +243,48 @@ Type any command below to execute directly on the PC.
       <!-- Viewer Content Area -->
       <div class="file-viewer-body" id="fileViewerBody">
         <div class="file-viewer-loading">Loading file content...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interactive New Session Modal -->
+  <div id="newSessionModal" class="session-modal hidden">
+    <div class="session-modal-dialog">
+      <div class="session-modal-header">
+        <div class="session-modal-title">
+          <span class="session-modal-icon">✨</span>
+          <span>Start New Session</span>
+        </div>
+        <button id="closeNewSessionBtn" class="modal-close-btn" onclick="closeNewSessionModal()" title="Close">✕</button>
+      </div>
+
+      <div class="session-modal-body">
+        <label class="session-modal-label" for="newSessionPrompt">What should Antigravity work on?</label>
+        <textarea id="newSessionPrompt" class="session-modal-textarea" rows="3" placeholder="e.g. Build a mobile dashboard, debug server.py, or write unit tests..."></textarea>
+        
+        <label class="session-modal-label">Select Model:</label>
+        <div class="model-pills" id="newSessionModelPills">
+          <button type="button" class="model-pill active" data-model="flash">
+            <span class="model-pill-name">⚡ Flash</span>
+            <span class="model-pill-sub">Fast &amp; Responsive</span>
+          </button>
+          <button type="button" class="model-pill" data-model="pro">
+            <span class="model-pill-name">🧠 Pro</span>
+            <span class="model-pill-sub">Deep Reasoning</span>
+          </button>
+        </div>
+
+        <div id="newSessionStatus" class="session-modal-status hidden">
+          <div class="session-spinner"></div>
+          <span id="newSessionStatusText">Spawning new agent session...</span>
+        </div>
+      </div>
+
+      <div class="session-modal-footer">
+        <button type="button" class="btn-cancel" onclick="closeNewSessionModal()">Cancel</button>
+        <button type="button" class="btn-launch" id="launchSessionBtn" onclick="submitNewSession()">
+          <span>🚀 Launch Session</span>
+        </button>
       </div>
     </div>
   </div>

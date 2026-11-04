@@ -1027,6 +1027,8 @@ class RemoteHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": "Prompt cannot be empty"}, code=400)
                 return
 
+            existing_cids = set(os.listdir(BRAIN_DIR)) if os.path.exists(BRAIN_DIR) else set()
+
             def execute_new():
                 try:
                     subprocess.run(
@@ -1040,7 +1042,24 @@ class RemoteHandler(BaseHTTPRequestHandler):
 
             t = threading.Thread(target=execute_new, daemon=True)
             t.start()
-            self.send_json({"status": "starting", "prompt": prompt})
+
+            # Brief check if session directory was created quickly
+            new_cid = None
+            for _ in range(4):
+                time.sleep(0.5)
+                if os.path.exists(BRAIN_DIR):
+                    curr_cids = set(os.listdir(BRAIN_DIR))
+                    diff = curr_cids - existing_cids
+                    if diff:
+                        candidates = list(diff)
+                        candidates.sort(key=lambda c: os.path.getmtime(os.path.join(BRAIN_DIR, c)), reverse=True)
+                        new_cid = candidates[0]
+                        break
+
+            if new_cid:
+                self.send_json({"status": "started", "conversation_id": new_cid, "prompt": prompt})
+            else:
+                self.send_json({"status": "starting", "prompt": prompt})
 
         elif path == "/api/exec_terminal":
             command = data.get("command", "").strip()
