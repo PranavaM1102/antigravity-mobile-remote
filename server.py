@@ -287,73 +287,77 @@ def start_cloudflared_tunnel():
         print("  [!] cloudflared not available. Public internet tunnel skipped.")
         return
 
-    cmd = [CLOUDFLARED_EXE, "tunnel", "--url", f"http://127.0.0.1:{PORT}"]
-    try:
-        TUNNEL_PROCESS = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-    except Exception as e:
-        print(f"  [!] Failed to start cloudflared: {e}")
-        return
+    def tunnel_supervisor():
+        global PUBLIC_TUNNEL_URL, TUNNEL_PROCESS
+        while True:
+            cmd = [CLOUDFLARED_EXE, "tunnel", "--url", f"http://127.0.0.1:{PORT}"]
+            try:
+                TUNNEL_PROCESS = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
+                )
+            except Exception as e:
+                print(f"  [!] Failed to start cloudflared: {e}")
+                time.sleep(5)
+                continue
 
-    print("  [*] Connecting to Cloudflare global network...")
+            print("  [*] Connecting to Cloudflare global network...")
+            for line in iter(TUNNEL_PROCESS.stdout.readline, ''):
+                if not line:
+                    break
+                m = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', line)
+                if m:
+                    PUBLIC_TUNNEL_URL = m.group(0)
+                    print("\n" + "=" * 65)
+                    print("  🌐 PUBLIC INTERNET TUNNEL READY (NO WI-FI NEEDED):")
+                    print(f"  👉 {PUBLIC_TUNNEL_URL}")
+                    print(f"  🔐 Security PIN : {get_configured_pin()}")
+                    print("=" * 65 + "\n")
 
-    def monitor_tunnel():
-        global PUBLIC_TUNNEL_URL
-        for line in iter(TUNNEL_PROCESS.stdout.readline, ''):
-            if not line:
-                break
-            m = re.search(r'https://[a-zA-Z0-9\-]+\.trycloudflare\.com', line)
-            if m:
-                PUBLIC_TUNNEL_URL = m.group(0)
-                print("\n" + "=" * 65)
-                print("  🌐 PUBLIC INTERNET TUNNEL READY (NO WI-FI NEEDED):")
-                print(f"  👉 {PUBLIC_TUNNEL_URL}")
-                print(f"  🔐 Security PIN : {get_configured_pin()}")
-                print("=" * 65 + "\n")
-
-                try:
-                    with open(os.path.join(BASE_DIR, "tunnel_url.txt"), "w") as tf:
-                        tf.write(PUBLIC_TUNNEL_URL)
-                except Exception:
-                    pass
-
-                def publish_resolver(url):
-                    # 1. Post to ntfy resolver for instant mobile auto-update
                     try:
-                        req = urllib.request.Request(
-                            "https://ntfy.sh/antigravity_tunnel_pranava1102",
-                            data=url.encode("utf-8"),
-                            headers={"User-Agent": "AntigravityServer"}
-                        )
-                        urllib.request.urlopen(req, timeout=5)
-                        print("  [+] Published new tunnel URL to mobile auto-resolver!")
-                    except Exception as ex:
-                        print(f"  [!] Resolver publish notice: {ex}")
+                        with open(os.path.join(BASE_DIR, "tunnel_url.txt"), "w") as tf:
+                            tf.write(PUBLIC_TUNNEL_URL)
+                    except Exception:
+                        pass
 
-                    # 2. Push to GitHub as permanent secondary resolver
+                    def publish_resolver(url):
+                        # 1. Post to ntfy resolver for instant mobile auto-update
+                        try:
+                            req = urllib.request.Request(
+                                "https://ntfy.sh/antigravity_tunnel_pranava1102",
+                                data=url.encode("utf-8"),
+                                headers={"User-Agent": "AntigravityServer"}
+                            )
+                            urllib.request.urlopen(req, timeout=5)
+                            print("  [+] Published new tunnel URL to mobile auto-resolver!")
+                        except Exception as ex:
+                            print(f"  [!] Resolver publish notice: {ex}")
+
+                        # 2. Push to GitHub as permanent secondary resolver
+                        try:
+                            subprocess.run(["git", "add", "tunnel_url.txt"], cwd=BASE_DIR, capture_output=True, timeout=10)
+                            subprocess.run(["git", "commit", "-m", "chore: auto-update tunnel url [skip ci]"], cwd=BASE_DIR, capture_output=True, timeout=10)
+                            subprocess.run(["git", "push", "origin", "main"], cwd=BASE_DIR, capture_output=True, timeout=15)
+                            print("  [+] Pushed new tunnel URL to GitHub repository!")
+                        except Exception as ex:
+                            print(f"  [!] Git push notice: {ex}")
+
+                    threading.Thread(target=publish_resolver, args=(PUBLIC_TUNNEL_URL,), daemon=True).start()
+
                     try:
-                        subprocess.run(["git", "add", "tunnel_url.txt"], cwd=BASE_DIR, capture_output=True, timeout=10)
-                        subprocess.run(["git", "commit", "-m", "chore: auto-update tunnel url [skip ci]"], cwd=BASE_DIR, capture_output=True, timeout=10)
-                        subprocess.run(["git", "push", "origin", "main"], cwd=BASE_DIR, capture_output=True, timeout=15)
-                        print("  [+] Pushed new tunnel URL to GitHub repository!")
+                        qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(PUBLIC_TUNNEL_URL)}"
+                        qr_path = os.path.join(BASE_DIR, "qr_internet.png")
+                        urllib.request.urlretrieve(qr_url, qr_path)
                     except Exception as ex:
-                        print(f"  [!] Git push notice: {ex}")
+                        print(f"  [!] QR download notice: {ex}")
 
-                threading.Thread(target=publish_resolver, args=(PUBLIC_TUNNEL_URL,), daemon=True).start()
+            print("  [!] Cloudflare tunnel connection dropped or exited. Reconnecting in 3s...")
+            time.sleep(3)
 
-                try:
-                    qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={urllib.parse.quote(PUBLIC_TUNNEL_URL)}"
-                    qr_path = os.path.join(BASE_DIR, "qr_internet.png")
-                    urllib.request.urlretrieve(qr_url, qr_path)
-                except Exception as ex:
-                    print(f"  [!] QR download notice: {ex}")
-
-    t = threading.Thread(target=monitor_tunnel, daemon=True)
+    t = threading.Thread(target=tunnel_supervisor, daemon=True)
     t.start()
 
 def list_conversations():
