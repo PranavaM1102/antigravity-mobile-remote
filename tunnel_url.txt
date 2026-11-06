@@ -1,1 +1,1 @@
-https://api.trycloudflare.com
+https://frontier-investigation-consumer-filtering.trycloudflare.com
