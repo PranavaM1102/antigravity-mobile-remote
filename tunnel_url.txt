@@ -1,1 +1,1 @@
-https://nodes-opposed-prompt-gordon.trycloudflare.com
+https://api.trycloudflare.com
