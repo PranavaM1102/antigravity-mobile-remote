@@ -354,6 +354,31 @@ def start_cloudflared_tunnel():
                     except Exception as ex:
                         print(f"  [!] QR download notice: {ex}")
 
+                    def tunnel_health_watchdog(proc, check_url):
+                        time.sleep(30)
+                        consecutive_fails = 0
+                        while proc.poll() is None:
+                            time.sleep(60)
+                            try:
+                                req = urllib.request.Request(check_url, headers={"User-Agent": "TunnelWatchdog"})
+                                with urllib.request.urlopen(req, timeout=8) as r:
+                                    if r.status in (200, 301, 302, 401, 403):
+                                        consecutive_fails = 0
+                            except Exception as ex:
+                                consecutive_fails += 1
+                                if consecutive_fails >= 3:
+                                    print(f"  [!] Tunnel health check failed 3 times ({ex}). Terminating stale cloudflared...")
+                                    try:
+                                        proc.terminate()
+                                        time.sleep(1)
+                                        if proc.poll() is None:
+                                            proc.kill()
+                                    except Exception:
+                                        pass
+                                    break
+
+                    threading.Thread(target=tunnel_health_watchdog, args=(TUNNEL_PROCESS, PUBLIC_TUNNEL_URL), daemon=True).start()
+
             print("  [!] Cloudflare tunnel connection dropped or exited. Reconnecting in 3s...")
             time.sleep(3)
 
