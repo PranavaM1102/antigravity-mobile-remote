@@ -1,1 +1,1 @@
-https://bernard-disks-inspections-stronger.trycloudflare.com
+https://api.trycloudflare.com
