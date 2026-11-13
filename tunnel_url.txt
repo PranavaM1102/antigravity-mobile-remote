@@ -1,1 +1,1 @@
-https://backup-throws-affect-grey.trycloudflare.com
+https://api.trycloudflare.com
